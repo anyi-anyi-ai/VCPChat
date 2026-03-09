@@ -2,7 +2,7 @@ use anyhow::{anyhow, Context, Result};
 use glob::glob;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -295,7 +295,14 @@ async fn run() -> Result<()> {
 
     let agent_info = find_agent_info(&config.vchat_data_url, &args.maid)
         .await?
-        .ok_or_else(|| anyhow!("Agent '{}' not found.", args.maid))?;
+        .ok_or_else(|| {
+            anyhow!(
+                "Agent '{}' not found in '{}'. Available agents: {}",
+                args.maid,
+                config.vchat_data_url.display(),
+                list_available_agent_names(&config.vchat_data_url)
+            )
+        })?;
     let user_name = find_user_name(&config.vchat_data_url).await?;
 
     let mut memories = search_histories(
@@ -649,24 +656,146 @@ async fn perform_rerank_request(documents: &[String], query: &str, config: &Conf
 
 async fn find_agent_info(vchat_path: &Path, maid_name: &str) -> Result<Option<AgentInfo>> {
     let agents_dir = vchat_path.join("Agents");
-    let mut read_dir = fs::read_dir(agents_dir).await?;
+    let mut read_dir = fs::read_dir(&agents_dir).await?;
+    let normalized_target = normalize_agent_name(maid_name);
+    let alias_map = build_agent_alias_map();
+    let target_variants = build_target_variants(maid_name, &normalized_target, &alias_map);
+    let mut fallback_match: Option<AgentInfo> = None;
+
     while let Some(entry) = read_dir.next_entry().await? {
         let path = entry.path();
-        if path.is_dir() {
-            let config_path = path.join("config.json");
-            if let Ok(content) = fs::read_to_string(config_path).await {
-                if let Ok(config) = serde_json::from_str::<AgentConfig>(&content) {
-                    if config.name.contains(maid_name) {
-                        return Ok(Some(AgentInfo {
-                            name: config.name,
-                            uuid: entry.file_name().to_string_lossy().into_owned(),
-                        }));
-                    }
-                }
+        if !path.is_dir() {
+            continue;
+        }
+
+        let config_path = path.join("config.json");
+        let content = match fs::read_to_string(&config_path).await {
+            Ok(content) => content,
+            Err(_) => continue,
+        };
+        let config = match serde_json::from_str::<AgentConfig>(&content) {
+            Ok(config) => config,
+            Err(_) => continue,
+        };
+
+        let agent_info = AgentInfo {
+            name: config.name,
+            uuid: entry.file_name().to_string_lossy().into_owned(),
+        };
+
+        let candidate_variants = build_target_variants(&agent_info.name, &normalize_agent_name(&agent_info.name), &alias_map);
+
+        if candidate_variants.iter().any(|candidate| target_variants.contains(candidate)) {
+            return Ok(Some(agent_info));
+        }
+
+        if fallback_match.is_none()
+            && !normalized_target.is_empty()
+            && candidate_variants.iter().any(|candidate| {
+                target_variants.iter().any(|target| {
+                    !candidate.is_empty() && !target.is_empty() && (candidate.contains(target) || target.contains(candidate))
+                })
+            })
+        {
+            fallback_match = Some(agent_info);
+        }
+    }
+
+    Ok(fallback_match)
+}
+
+fn normalize_agent_name(name: &str) -> String {
+    name.chars()
+        .filter(|c| !c.is_whitespace() && !matches!(c, '“' | '”' | '"' | '\'' | '「' | '」' | '[' | ']' | '(' | ')' | '（' | '）' | '-' | '_' | '·' | '.'))
+        .flat_map(|c| c.to_lowercase())
+        .collect()
+}
+
+fn build_agent_alias_map() -> HashMap<String, Vec<String>> {
+    let alias_groups = vec![
+        vec!["爱弥斯", "爱米斯", "aemeath", "aemeis", "aimisi"],
+        vec!["阿诺", "anuo", "arno"],
+        vec!["小亚", "aya"],
+        vec!["可可", "coco", "themaidcoco", "thememaidcoco"],
+        vec!["新星", "nova"],
+        vec!["锻造者", "forge"],
+        vec!["神经元", "neuron"],
+        vec!["棱镜", "prism"],
+        vec!["藏", "sangzang"],
+        vec!["泰拉", "terra"],
+        vec!["毛轩", "maoxuan"],
+        vec!["绘图", "drawing"],
+        vec!["热点探索", "hot", "news"],
+    ];
+
+    let mut alias_map = HashMap::new();
+    for group in alias_groups {
+        let normalized_group: Vec<String> = group
+            .into_iter()
+            .map(normalize_agent_name)
+            .filter(|value| !value.is_empty())
+            .collect();
+
+        for alias in &normalized_group {
+            alias_map.insert(alias.clone(), normalized_group.clone());
+        }
+    }
+
+    alias_map
+}
+
+fn build_target_variants(raw_name: &str, normalized_name: &str, alias_map: &HashMap<String, Vec<String>>) -> HashSet<String> {
+    let mut variants = HashSet::new();
+
+    let raw_normalized = normalize_agent_name(raw_name);
+    if !raw_normalized.is_empty() {
+        variants.insert(raw_normalized.clone());
+    }
+
+    if !normalized_name.is_empty() {
+        variants.insert(normalized_name.to_string());
+    }
+
+    if let Some(mapped_aliases) = alias_map.get(normalized_name) {
+        variants.extend(mapped_aliases.iter().cloned());
+    }
+
+    if let Some(mapped_aliases) = alias_map.get(&raw_normalized) {
+        variants.extend(mapped_aliases.iter().cloned());
+    }
+
+    variants
+}
+
+fn list_available_agent_names(vchat_path: &Path) -> String {
+    let agents_dir = vchat_path.join("Agents");
+    let entries = match std::fs::read_dir(&agents_dir) {
+        Ok(entries) => entries,
+        Err(_) => return "<unable to read Agents directory>".to_string(),
+    };
+
+    let mut names = Vec::new();
+    for entry in entries.flatten() {
+        let config_path = entry.path().join("config.json");
+        let content = match std::fs::read_to_string(config_path) {
+            Ok(content) => content,
+            Err(_) => continue,
+        };
+
+        if let Ok(config) = serde_json::from_str::<AgentConfig>(&content) {
+            if !config.name.trim().is_empty() {
+                names.push(config.name);
             }
         }
     }
-    Ok(None)
+
+    if names.is_empty() {
+        "<no readable agent names>".to_string()
+    } else {
+        names.sort();
+        names.dedup();
+        names.join(", ")
+    }
 }
 
 async fn find_user_name(vchat_path: &Path) -> Result<String> {
