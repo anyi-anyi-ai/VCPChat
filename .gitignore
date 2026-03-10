@@ -29,3 +29,4 @@ modules/settingsManager.js
 package-lock.json
 package.json
 styles/themes.css
+bin/
