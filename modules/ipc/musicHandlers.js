@@ -1,4 +1,4 @@
-﻿// modules/ipc/musicHandlers.js
+// modules/ipc/musicHandlers.js
 
 const { ipcMain, BrowserWindow, dialog } = require('electron');
 const path = require('path');
@@ -401,19 +401,53 @@ function initialize(options) {
             return audioEngineApi('/unload_ir', 'POST');
         });
 
+        // --- IR Presets Handling ---
+        ipcMain.handle('music-list-ir-presets', async () => {
+            const irPresetDir = path.join(__dirname, '..', '..', 'audio_engine', 'IRPreset');
+            if (!(await fs.pathExists(irPresetDir))) return [];
+            try {
+                const files = await fs.readdir(irPresetDir);
+                const audioExtensions = new Set(['.wav', '.flac', '.mp3', '.ogg', '.m4a', '.ape']);
+                return files
+                    .filter(file => audioExtensions.has(path.extname(file).toLowerCase()))
+                    .map(file => path.parse(file).name);
+            } catch (err) {
+                console.error('[Music] Failed to list IR presets:', err);
+                return [];
+            }
+        });
+
+        ipcMain.handle('music-get-ir-preset-path', async (event, presetName) => {
+            const irPresetDir = path.join(__dirname, '..', '..', 'audio_engine', 'IRPreset');
+            if (!(await fs.pathExists(irPresetDir))) return null;
+            try {
+                const files = await fs.readdir(irPresetDir);
+                const audioExtensions = new Set(['.wav', '.flac', '.mp3', '.ogg', '.m4a', '.ape']);
+                const match = files.find(file => {
+                    const p = path.parse(file);
+                    return p.name === presetName && audioExtensions.has(p.ext.toLowerCase());
+                });
+                return match ? path.join(irPresetDir, match) : null;
+            } catch (err) {
+                console.error('[Music] Failed to get IR preset path:', err);
+                return null;
+            }
+        });
+
         // --- IR File Selection Dialog ---
         ipcMain.handle('select-ir-file', async () => {
             const result = await dialog.showOpenDialog(musicWindow || mainWindow, {
                 title: '选择脉冲响应文件 (IR)',
                 filters: [
-                    { name: '音频文件', extensions: ['wav', 'flac', 'mp3', 'ogg'] },
+                    { name: '音频文件', extensions: ['wav', 'flac', 'mp3', 'ogg', 'm4a', 'ape'] },
                     { name: 'WAV', extensions: ['wav'] },
                     { name: 'FLAC', extensions: ['flac'] },
                     { name: '所有文件', extensions: ['*'] }
                 ],
                 properties: ['openFile']
             });
-            return result;
+            if (result.canceled || result.filePaths.length === 0) return null;
+            return result.filePaths[0];
         });
 
         ipcMain.handle('music-add-folder', async (event) => {
@@ -447,7 +481,7 @@ function initialize(options) {
 
             try {
                 await collectFilePaths(folderPath);
-                event.sender.send('scan-started', { total: fileList.length });
+                event.sender.send('music-scan-start', { total: fileList.length });
 
                 await fs.ensureDir(MUSIC_COVER_CACHE_DIR);
 
@@ -467,17 +501,17 @@ function initialize(options) {
                     }
 
                     processedCount++;
-                    event.sender.send('scan-progress');
+                    event.sender.send('music-scan-progress', { current: processedCount, total: fileList.length });
 
                     if (processedCount === fileList.length) {
-                        event.sender.send('scan-finished', finalPlaylist);
+                        event.sender.send('music-scan-complete', finalPlaylist);
                         worker.terminate();
                     }
                 });
 
                 worker.on('error', (error) => {
                     console.error('Worker thread error:', error);
-                    event.sender.send('scan-finished', finalPlaylist);
+                    event.sender.send('music-scan-complete', finalPlaylist);
                     worker.terminate();
                 });
 
@@ -491,7 +525,7 @@ function initialize(options) {
 
             } catch (err) {
                 console.error("Error during music scan setup:", err);
-                event.sender.send('scan-finished', []);
+                event.sender.send('music-scan-complete', []);
             }
         });
 

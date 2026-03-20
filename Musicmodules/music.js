@@ -195,6 +195,9 @@ document.addEventListener('DOMContentLoaded', () => {
         lastShuffleList: null,
         wnpAdapter: null,
         dragInProgress: false,
+        isChangingState: false,
+        lastCommandTime: 0,
+        expectedPlayingState: false,
     };
 
 
@@ -266,6 +269,7 @@ document.addEventListener('DOMContentLoaded', () => {
             app.updateVolumeSliderBackground(val);
             if (window.electron) window.electron.invoke('music-set-volume', val);
             if (app.wnpAdapter) app.wnpAdapter.sendUpdate();
+            app.saveSettings();
         };
 
         app.handleProgressUpdate = async (e, shouldSeek = false) => {
@@ -337,15 +341,91 @@ document.addEventListener('DOMContentLoaded', () => {
             if (app.irSwitch.checked) { if (app.irLoadedPath) app.loadIrFile(app.irLoadedPath); else app.irLoadBtn.click(); }
             else app.unloadIr();
         };
-        app.irPresetSelect.onchange = (e) => {
+        app.irPresetSelect.onchange = async (e) => {
             const val = e.target.value;
-            if (val === 'custom') { app.irLoadBtn.style.display = 'block'; app.irLoadBtn.click(); }
-            else { app.irLoadBtn.style.display = 'none'; if (val) app.loadIrFile(val); else app.unloadIr(); }
+            if (val === 'custom') { 
+                app.irLoadBtn.style.display = 'block'; 
+                app.irLoadBtn.click(); 
+            } else if (val === '') {
+                app.irLoadBtn.style.display = 'none';
+                app.unloadIr();
+            } else {
+                app.irLoadBtn.style.display = 'none';
+                try {
+                    const filePath = await window.electron.invoke('music-get-ir-preset-path', val);
+                    if (filePath) app.loadIrFile(filePath);
+                    else app.updateIrStatus('预设文件未找到', 'error');
+                } catch (err) {
+                    console.error('[Music] Failed to load IR preset:', err);
+                    app.updateIrStatus('加载预设失败', 'error');
+                }
+            }
         };
+
+        app.loadAvailableIrPresets = async () => {
+            try {
+                const presets = await window.electron.invoke('music-list-ir-presets');
+                if (presets && presets.length > 0) {
+                    const select = app.irPresetSelect;
+                    // 保留第一个和最后一个选项
+                    const customOption = select.options[select.options.length - 1];
+                    const defaultOption = select.options[0];
+                    
+                    select.innerHTML = '';
+                    select.add(defaultOption);
+                    
+                    presets.forEach(p => {
+                        const opt = document.createElement('option');
+                        opt.value = p;
+                        opt.textContent = p;
+                        select.add(opt);
+                    });
+                    
+                    select.add(customOption);
+                }
+            } catch (err) {
+                console.error('[Music] Failed to update IR presets list:', err);
+            }
+        };
+        app.loadAvailableIrPresets();
         app.irLoadBtn.onclick = async () => {
             const filePath = await window.electron.invoke('select-ir-file');
             if (filePath) app.loadIrFile(filePath);
         };
+
+        // --- IR Help Tip Logic ---
+        const irHelpIcon = document.getElementById('ir-help-icon');
+        const irHelpTip = document.getElementById('ir-help-tip');
+        const irAutoEqLink = document.getElementById('ir-autoeq-link');
+
+        console.log('[IR Help] Found elements:', { irHelpIcon: !!irHelpIcon, irHelpTip: !!irHelpTip });
+
+        if (irHelpIcon && irHelpTip) {
+            irHelpIcon.onclick = (e) => {
+                console.log('[IR Help] Icon clicked');
+                e.stopPropagation();
+                const isHidden = irHelpTip.style.display === 'none';
+                irHelpTip.style.display = isHidden ? 'block' : 'none';
+                console.log('[IR Help] Tooltip display set to:', irHelpTip.style.display);
+            };
+            
+            if (irAutoEqLink) {
+                irAutoEqLink.onclick = (e) => {
+                    e.preventDefault();
+                    console.log('[IR Help] AutoEq link clicked');
+                    if (window.electronAPI && window.electronAPI.sendOpenExternalLink) {
+                        window.electronAPI.sendOpenExternalLink('https://autoeq.app/');
+                    }
+                };
+            }
+
+            // 点击外部关闭提示
+            document.addEventListener('click', (e) => {
+                if (irHelpTip.style.display === 'block' && !irHelpTip.contains(e.target) && e.target !== irHelpIcon) {
+                    irHelpTip.style.display = 'none';
+                }
+            });
+        }
 
         app.loudnessSwitch.onchange = () => app.updateLoudnessSettings();
         app.loudnessModeSelect.onchange = () => app.updateLoudnessSettings();
@@ -458,8 +538,13 @@ document.addEventListener('DOMContentLoaded', () => {
             app.scanProgressLabel.textContent = `正在扫描: ${data.current} / ${data.total}`;
         });
         window.electron.on('music-scan-complete', (newPlaylist) => {
-            app.loadingIndicator.style.display = 'none'; app.playlist = newPlaylist;
+            app.loadingIndicator.style.display = 'none';
+            // Merge new tracks, avoiding duplicates by path
+            const existingPaths = new Set(app.playlist.map(t => t.path));
+            const brandNewTracks = newPlaylist.filter(t => !existingPaths.has(t.path));
+            app.playlist = [...app.playlist, ...brandNewTracks];
             app.renderPlaylist(); app.renderSidebarContent(app.currentSidebarView);
+            window.electron.invoke('save-music-playlist', app.playlist);
         });
         window.electron.on('theme-updated', (theme) => app.applyTheme(theme));
         window.electron.on('music-control', (command) => {
@@ -481,6 +566,17 @@ document.addEventListener('DOMContentLoaded', () => {
             app.durationEl.textContent = app.formatTime(state.duration);
         }
         if (state.is_playing !== app.isPlaying) {
+            // Optimistic UI guard: Ignore polled state if we just sent a command
+            const now = Date.now();
+            if (app.isChangingState && (now - app.lastCommandTime < 800)) {
+                if (state.is_playing === app.expectedPlayingState) {
+                    app.isChangingState = false;
+                } else {
+                    // Skip update to prevent flickering
+                    return;
+                }
+            }
+
             app.isPlaying = state.is_playing;
             app.playPauseBtn.classList.toggle('is-playing', app.isPlaying);
             if (app.isPlaying) app.startStatePolling(); else app.stopStatePolling();
@@ -531,6 +627,48 @@ document.addEventListener('DOMContentLoaded', () => {
             app.preemptiveResampleSwitch._programmaticUpdate = true; app.preemptiveResampleSwitch.checked = s.preemptive_resample;
             Promise.resolve().then(() => app.preemptiveResampleSwitch._programmaticUpdate = false);
         }
+
+        // Restore missing effects settings (Structural Fix)
+        if (s.loudness_enabled !== undefined) {
+            app.loudnessEnabled = s.loudness_enabled;
+            app.loudnessSwitch.checked = s.loudness_enabled;
+            app.loudnessMode = s.loudness_mode;
+            app.loudnessModeSelect.value = s.loudness_mode;
+            app.targetLufs = s.target_lufs;
+            app.loudnessLufsSlider.value = s.target_lufs;
+            app.loudnessPreampDb = s.preamp_db;
+            app.loudnessPreampSlider.value = s.preamp_db;
+            app.updateLoudnessLufsDisplay();
+            app.updateLoudnessPreampDisplay();
+            app.updateLoudnessSettings(); // Sync to engine
+        }
+        if (s.saturation_enabled !== undefined) {
+            app.saturationEnabled = s.saturation_enabled;
+            app.saturationSwitch.checked = s.saturation_enabled;
+            app.saturationDrive = s.saturation_drive;
+            app.saturationDriveSlider.value = s.saturation_drive * 100;
+            app.saturationMix = s.saturation_mix;
+            app.saturationMixSlider.value = s.saturation_mix * 100;
+            app.updateSaturationDriveDisplay();
+            app.updateSaturationMixDisplay();
+            app.updateSaturationSettings(); // Sync to engine
+        }
+        if (s.crossfeed_enabled !== undefined) {
+            app.crossfeedEnabled = s.crossfeed_enabled;
+            app.crossfeedSwitch.checked = s.crossfeed_enabled;
+            app.crossfeedMix = s.crossfeed_mix;
+            app.crossfeedMixSlider.value = s.crossfeed_mix * 100;
+            app.updateCrossfeedMixDisplay();
+            app.updateCrossfeedSettings(); // Sync to engine
+        }
+        if (s.dynamic_loudness_enabled !== undefined) {
+            app.dynamicLoudnessEnabled = s.dynamic_loudness_enabled;
+            app.dynamicLoudnessSwitch.checked = s.dynamic_loudness_enabled;
+            app.dynamicLoudnessStrength = s.dynamic_loudness_strength;
+            app.dynamicLoudnessStrengthSlider.value = s.dynamic_loudness_strength * 100;
+            app.updateDynamicLoudnessStrengthDisplay();
+            app.updateDynamicLoudnessSettings(); // Sync to engine
+        }
     };
 
     app.updateModeButton = () => {
@@ -549,11 +687,21 @@ document.addEventListener('DOMContentLoaded', () => {
         app.saveSettingsTimer = setTimeout(() => {
             if (window.electron) {
                 window.electron.invoke('music-save-settings', {
-                    upsampling: app.targetUpsamplingRate,
-                    loudness: { enabled: app.loudnessEnabled, mode: app.loudnessMode, target_lufs: app.targetLufs, preamp: app.loudnessPreampDb },
-                    saturation: { enabled: app.saturationEnabled, type: app.saturationType, drive: app.saturationDrive, mix: app.saturationMix },
-                    crossfeed: { enabled: app.crossfeedEnabled, mix: app.crossfeedMix },
-                    dynamic_loudness: { enabled: app.dynamicLoudnessEnabled, strength: app.dynamicLoudnessStrength }
+                    settings: {
+                        volume: parseFloat(app.volumeSlider.value),
+                        target_samplerate: app.targetUpsamplingRate,
+                        loudness_enabled: app.loudnessEnabled,
+                        loudness_mode: app.loudnessMode,
+                        target_lufs: app.targetLufs,
+                        preamp_db: app.loudnessPreampDb,
+                        saturation_enabled: app.saturationEnabled,
+                        saturation_drive: app.saturationDrive,
+                        saturation_mix: app.saturationMix,
+                        crossfeed_enabled: app.crossfeedEnabled,
+                        crossfeed_mix: app.crossfeedMix,
+                        dynamic_loudness_enabled: app.dynamicLoudnessEnabled,
+                        dynamic_loudness_strength: app.dynamicLoudnessStrength
+                    }
                 });
             }
         }, 1000);
