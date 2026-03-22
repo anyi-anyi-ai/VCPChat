@@ -437,6 +437,32 @@ contextBridge.exposeInMainWorld('electronAPI', {
     desktopListWidgets: () => ipcRenderer.invoke('desktop-list-widgets'),
     desktopCaptureWidget: (rect) => ipcRenderer.invoke('desktop-capture-widget', rect),
     desktopGetCredentials: () => ipcRenderer.invoke('desktop-get-credentials'),
+
+    // VCPdesktop - 快捷方式系统 IPC 通道
+    desktopShortcutParse: (filePath) => ipcRenderer.invoke('desktop-shortcut-parse', filePath),
+    desktopShortcutParseBatch: (filePaths) => ipcRenderer.invoke('desktop-shortcut-parse-batch', filePaths),
+    desktopShortcutLaunch: (shortcutData) => ipcRenderer.invoke('desktop-shortcut-launch', shortcutData),
+    desktopScanShortcuts: () => ipcRenderer.invoke('desktop-scan-shortcuts'),
+
+    // VCPdesktop - Dock 持久化 IPC 通道
+    desktopSaveDock: (dockData) => ipcRenderer.invoke('desktop-save-dock', dockData),
+    desktopLoadDock: () => ipcRenderer.invoke('desktop-load-dock'),
+
+    // VCPdesktop - 布局持久化 IPC 通道
+    desktopSaveLayout: (layoutData) => ipcRenderer.invoke('desktop-save-layout', layoutData),
+    desktopLoadLayout: () => ipcRenderer.invoke('desktop-load-layout'),
+
+    // VCPdesktop - 图标集系统 IPC 通道
+    desktopIconsetListPresets: () => ipcRenderer.invoke('desktop-iconset-list-presets'),
+    desktopIconsetListIcons: (params) => ipcRenderer.invoke('desktop-iconset-list-icons', params),
+    desktopIconsetGetIconData: (relativePath) => ipcRenderer.invoke('desktop-iconset-get-icon-data', relativePath),
+
+    // VCPdesktop - 壁纸系统 IPC 通道
+    desktopSelectWallpaper: () => ipcRenderer.invoke('desktop-select-wallpaper'),
+    desktopReadWallpaperThumbnail: (filePath) => ipcRenderer.invoke('desktop-read-wallpaper-thumbnail', filePath),
+
+    // VCPdesktop - 窗口置底控制
+    setAlwaysOnBottom: (enabled) => ipcRenderer.invoke('desktop-set-always-on-bottom', enabled),
 });
 
 // Log the electronAPI object as it's defined in preload.js right after exposing it
