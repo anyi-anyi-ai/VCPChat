@@ -29,4 +29,5 @@ modules/itemListManager.js
 modules/settingsManager.js
 package-lock.json
 package.json
-styles/themes.css
+styles/themes.cssbin/  
+loudness_cache.db  
