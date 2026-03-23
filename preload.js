@@ -400,6 +400,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     loadMemoConfig: () => ipcRenderer.invoke('load-memo-config'),
     saveMemoConfig: (config) => ipcRenderer.invoke('save-memo-config', config),
 
+    // Music Module
+    openMusicWindow: () => ipcRenderer.send('open-music-window'),
+
     // Canvas Module
     openCanvasWindow: () => ipcRenderer.invoke('open-canvas-window'),
     canvasReady: () => ipcRenderer.send('canvas-ready'),
@@ -430,6 +433,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onDesktopStatus: (callback) => ipcRenderer.on('desktop-status', (_event, data) => callback(data)),
     openDesktopWindow: () => ipcRenderer.invoke('open-desktop-window'),
 
+    // VCPdesktop - 桌面远程控制 IPC 通道 (DesktopRemote 插件)
+    onDesktopRemoteSetWallpaper: (callback) => ipcRenderer.on('desktop-remote-set-wallpaper', (_event, data) => callback(data)),
+    onDesktopRemoteQuery: (callback) => ipcRenderer.on('desktop-remote-query', (_event) => callback()),
+    sendDesktopRemoteQueryResponse: (data) => ipcRenderer.send('desktop-remote-query-response', data),
+    onDesktopRemoteViewSource: (callback) => ipcRenderer.on('desktop-remote-view-source', (_event, data) => callback(data)),
+    sendDesktopRemoteViewSourceResponse: (data) => ipcRenderer.send('desktop-remote-view-source-response', data),
+    onDesktopRemoteCreateWidget: (callback) => ipcRenderer.on('desktop-remote-create-widget', (_event, data) => callback(data)),
+    sendDesktopRemoteCreateWidgetResponse: (data) => ipcRenderer.send('desktop-remote-create-widget-response', data),
+
     // VCPdesktop - 收藏系统 IPC 通道
     desktopSaveWidget: (data) => ipcRenderer.invoke('desktop-save-widget', data),
     desktopLoadWidget: (id) => ipcRenderer.invoke('desktop-load-widget', id),
@@ -457,12 +469,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
     desktopIconsetListIcons: (params) => ipcRenderer.invoke('desktop-iconset-list-icons', params),
     desktopIconsetGetIconData: (relativePath) => ipcRenderer.invoke('desktop-iconset-get-icon-data', relativePath),
 
+    // VCPdesktop - VChat 内部应用启动 IPC 通道
+    desktopLaunchVchatApp: (appAction) => ipcRenderer.invoke('desktop-launch-vchat-app', appAction),
+
     // VCPdesktop - 壁纸系统 IPC 通道
     desktopSelectWallpaper: () => ipcRenderer.invoke('desktop-select-wallpaper'),
     desktopReadWallpaperThumbnail: (filePath) => ipcRenderer.invoke('desktop-read-wallpaper-thumbnail', filePath),
 
     // VCPdesktop - 窗口置底控制
     setAlwaysOnBottom: (enabled) => ipcRenderer.invoke('desktop-set-always-on-bottom', enabled),
+
+    // VCPdesktop - 打开 Windows 系统工具
+    desktopOpenSystemTool: (cmd) => ipcRenderer.invoke('desktop-open-system-tool', cmd),
 });
 
 // Log the electronAPI object as it's defined in preload.js right after exposing it

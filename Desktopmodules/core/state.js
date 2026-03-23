@@ -20,17 +20,29 @@
         dock: {
             items: [],               // [{ id, name, icon, targetPath, args, workingDir, originalPath, type:'shortcut'|'builtin' }]
             maxVisible: 8,           // Dock 默认最大可见图标数
+            position: 'bottom',      // Dock 位置：'top' | 'bottom' | 'left' | 'right'
+            edgeDistance: 12,        // Dock 距边缘距离 (px)
         },
         // 桌面图标（从 Dock 拖出的快捷方式）
         desktopIcons: [],            // [{ id, name, icon, targetPath, args, workingDir, originalPath, x, y }]
+        // 上次载入的预设ID（用于桌面右键菜单"保存当前预设"功能的检测）
+        lastLoadedPresetId: null,
+        lastLoadedPresetName: null,
         // 全局设置
         globalSettings: {
             autoMaximize: false,     // 打开桌面时自动最大化
             alwaysOnBottom: false,   // 桌面窗口自动置底
+            visibilityFreezerEnabled: true,  // 最小化/遮挡时自动冻结动画
             defaultPresetId: null,   // 启动时自动加载的预设ID
             dock: {
                 maxVisible: 8,       // Dock 栏默认显示图标数
                 iconSize: 32,        // Dock 栏图标大小 (px)
+                position: 'bottom',  // Dock 栏位置：'top' | 'bottom' | 'left' | 'right'
+                edgeDistance: 12,     // Dock 栏距边缘距离 (px)
+            },
+            desktopIcon: {
+                gridSnap: false,     // 桌面图标网格对齐
+                iconSize: 40,        // 桌面图标大小 (px)，默认 40
             },
             wallpaper: {
                 enabled: false,          // 是否启用自定义壁纸

@@ -239,6 +239,9 @@
      * @param {object} widgetData
      */
     function autoResizeWidget(widgetData) {
+        // 如果挂件标记了固定尺寸，跳过自动调整
+        if (widgetData.fixedSize) return;
+
         requestAnimationFrame(() => {
             const container = widgetData.contentContainer;
             if (!container) return;
@@ -363,6 +366,7 @@
                     
                     var vcpAPI = {
                         fetch: function(endpoint, opts) { return window.__vcpProxyFetch(endpoint, opts); },
+                        post: function(messages, opts) { return window.__vcpProxyPost(messages, opts); },
                         weather: function() { return window.__vcpProxyFetch('/admin_api/weather'); },
                     };
                     

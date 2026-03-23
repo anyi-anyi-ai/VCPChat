@@ -1,10 +1,10 @@
 /**
  * modules/ipc/desktopHandlers.js
  * VCPdesktop IPC 处理模块
- * 负责：桌面窗口创建管理、流式推送转发、收藏系统持久化、快捷方式解析/启动、Dock持久化、布局持久化、壁纸文件选择
+ * 负责：桌面窗口创建管理、流式推送转发、收藏系统持久化、快捷方式解析/启动、Dock持久化、布局持久化、壁纸文件选择、VChat内部应用启动
  */
 
-const { BrowserWindow, ipcMain, app, screen, shell, dialog } = require('electron');
+const { BrowserWindow, ipcMain, app, screen, shell, dialog, nativeTheme } = require('electron');
 const path = require('path');
 const fs = require('fs-extra');
 
@@ -15,6 +15,13 @@ let openChildWindows = [];
 let appSettingsManager = null;
 let alwaysOnBottomEnabled = false;
 let alwaysOnBottomInterval = null;
+
+// --- VChat 内部子窗口单例引用 ---
+let vchatForumWindow = null;
+let vchatMemoWindow = null;
+let vchatTranslatorWindow = null;
+let vchatMusicWindow = null;
+let vchatThemesWindow = null;
 
 // --- 收藏系统路径 - 使用项目根目录的 AppData ---
 const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
@@ -80,12 +87,155 @@ function isIconValid(nativeImg) {
 }
 
 /**
+ * 在所有已打开的窗口中查找 URL 包含指定关键词的窗口
+ * @param {string} urlKeyword - URL 中需要包含的关键词（如 'forum.html'）
+ * @returns {BrowserWindow|null}
+ */
+function findWindowByUrl(urlKeyword) {
+    const allWindows = BrowserWindow.getAllWindows();
+    return allWindows.find(win => {
+        if (win.isDestroyed()) return false;
+        try {
+            const url = win.webContents.getURL();
+            return url.includes(urlKeyword);
+        } catch (e) {
+            return false;
+        }
+    }) || null;
+}
+
+/**
+ * 创建或聚焦一个通用子窗口（用于 VChat 内部应用）
+ * @param {BrowserWindow|null} existingWindow - 现有窗口引用
+ * @param {object} options - 窗口配置
+ * @returns {BrowserWindow} 创建或聚焦后的窗口
+ */
+function createOrFocusChildWindow(existingWindow, options) {
+    if (existingWindow && !existingWindow.isDestroyed()) {
+        if (!existingWindow.isVisible()) existingWindow.show();
+        existingWindow.focus();
+        return existingWindow;
+    }
+
+    const win = new BrowserWindow({
+        width: options.width || 1000,
+        height: options.height || 700,
+        minWidth: options.minWidth || 600,
+        minHeight: options.minHeight || 400,
+        title: options.title || 'VChat',
+        frame: false,
+        ...(process.platform === 'darwin' ? {} : { titleBarStyle: 'hidden' }),
+        modal: false,
+        webPreferences: {
+            preload: path.join(app.getAppPath(), 'preload.js'),
+            contextIsolation: true,
+            nodeIntegration: false,
+            devTools: true,
+        },
+        icon: path.join(app.getAppPath(), 'assets', 'icon.png'),
+        show: false,
+    });
+
+    // 构建 URL
+    let url = `file://${options.htmlPath}`;
+    if (options.queryParams) {
+        url += `?${options.queryParams}`;
+    }
+
+    win.loadURL(url);
+    win.setMenu(null);
+
+    if (openChildWindows) {
+        openChildWindows.push(win);
+    }
+
+    win.once('ready-to-show', () => {
+        win.show();
+    });
+
+    win.on('close', (evt) => {
+        if (process.platform === 'darwin' && !app.isQuitting) {
+            evt.preventDefault();
+            win.hide();
+        }
+    });
+
+    win.on('closed', () => {
+        if (openChildWindows) {
+            const idx = openChildWindows.indexOf(win);
+            if (idx > -1) openChildWindows.splice(idx, 1);
+        }
+        // 清理单例引用
+        if (win === vchatForumWindow) vchatForumWindow = null;
+        if (win === vchatMemoWindow) vchatMemoWindow = null;
+        if (win === vchatTranslatorWindow) vchatTranslatorWindow = null;
+        if (win === vchatThemesWindow) vchatThemesWindow = null;
+    });
+
+    console.log(`[DesktopHandlers] Created child window: ${options.title}`);
+    return win;
+}
+
+/**
+ * 启动 Windows 系统工具
+ * 支持的命令格式：
+ *   - ms-settings:display     → 打开 Windows 显示设置
+ *   - ms-settings:            → 打开 Windows 设置首页
+ *   - control                 → 打开控制面板
+ *   - shell:RecycleBinFolder  → 打开回收站
+ *   - shell:MyComputerFolder  → 打开此电脑
+ * @param {string} cmd - 系统命令
+ * @returns {Promise<{success: boolean, error?: string}>}
+ */
+async function launchSystemTool(cmd) {
+    try {
+        if (!cmd) {
+            return { success: false, error: '缺少命令参数' };
+        }
+
+        console.log(`[DesktopHandlers] Launching system tool: ${cmd}`);
+
+        if (cmd.startsWith('ms-settings:')) {
+            // Windows 设置 URI - 使用 shell.openExternal
+            await shell.openExternal(cmd);
+            return { success: true };
+        }
+
+        if (cmd === 'control') {
+            // 控制面板 - 使用 shell.openPath
+            const { exec } = require('child_process');
+            exec('control.exe', (err) => {
+                if (err) console.warn('[DesktopHandlers] control.exe launch warning:', err.message);
+            });
+            return { success: true };
+        }
+
+        if (cmd.startsWith('shell:')) {
+            // Windows Shell 文件夹 - 使用 explorer.exe
+            const { exec } = require('child_process');
+            exec(`explorer.exe ${cmd}`, (err) => {
+                if (err) console.warn('[DesktopHandlers] explorer.exe launch warning:', err.message);
+            });
+            return { success: true };
+        }
+
+        // 通用方案：尝试直接打开
+        await shell.openPath(cmd);
+        return { success: true };
+    } catch (err) {
+        console.error(`[DesktopHandlers] System tool launch error (${cmd}):`, err);
+        return { success: false, error: err.message };
+    }
+}
+
+/**
  * 初始化桌面处理模块
  */
 function initialize(params) {
     mainWindow = params.mainWindow;
     openChildWindows = params.openChildWindows;
     appSettingsManager = params.settingsManager;
+
 
     // 确保目录存在
     fs.ensureDirSync(DESKTOP_WIDGETS_DIR);
@@ -297,6 +447,7 @@ function initialize(params) {
             const forumConfigPath = path.join(PROJECT_ROOT, 'AppData', 'UserData', 'forum.config.json');
 
             let vcpServerUrl = '';
+            let vcpApiKey = '';
             let username = '';
             let password = '';
 
@@ -304,6 +455,7 @@ function initialize(params) {
                 try {
                     const settings = await fs.readJson(settingsPath);
                     vcpServerUrl = settings.vcpServerUrl || '';
+                    vcpApiKey = settings.vcpApiKey || '';
                 } catch (e) { /* ignore */ }
             }
 
@@ -327,6 +479,8 @@ function initialize(params) {
             return {
                 success: true,
                 apiBaseUrl,
+                vcpServerUrl,
+                vcpApiKey,
                 username,
                 password,
             };
@@ -341,12 +495,110 @@ function initialize(params) {
     // ============================================================
 
     /**
+     * 解析 Windows .url 快捷方式文件（Internet Shortcut）
+     * 支持 Steam 等使用自定义协议的应用（如 steam://rungameid/570）
+     * @param {string} filePath - .url 文件路径
+     * @returns {object|null} 解析后的快捷方式信息
+     */
+    /**
+     * 带超时的 Promise 包装器
+     */
+    function withTimeout(promise, ms, fallback) {
+        return Promise.race([
+            promise,
+            new Promise(resolve => setTimeout(() => resolve(fallback), ms)),
+        ]);
+    }
+
+    async function parseUrlShortcut(filePath) {
+        try {
+            const content = await fs.readFile(filePath, 'utf-8');
+            const lines = content.split(/\r?\n/);
+
+            let url = '';
+            let iconFile = '';
+            let iconIndex = 0;
+
+            for (const line of lines) {
+                const trimmed = line.trim();
+                if (trimmed.toLowerCase().startsWith('url=')) {
+                    url = trimmed.substring(4);
+                } else if (trimmed.toLowerCase().startsWith('iconfile=')) {
+                    iconFile = trimmed.substring(9);
+                } else if (trimmed.toLowerCase().startsWith('iconindex=')) {
+                    iconIndex = parseInt(trimmed.substring(10), 10) || 0;
+                }
+            }
+
+            if (!url) return null;
+
+            const name = path.basename(filePath, '.url');
+
+            // 提取图标（带超时保护，防止 getFileIcon 挂起）
+            let iconDataUrl = '';
+            try {
+                // 优先从 IconFile 指定的文件提取图标
+                if (iconFile && await fs.pathExists(iconFile)) {
+                    const nativeImage = await withTimeout(
+                        app.getFileIcon(iconFile, { size: 'large' }),
+                        3000, // 3秒超时
+                        null
+                    );
+                    if (nativeImage && !nativeImage.isEmpty() && isIconValid(nativeImage)) {
+                        iconDataUrl = nativeImage.toDataURL();
+                    }
+                }
+                // 如果没有有效图标，尝试从 .url 文件本身提取
+                if (!iconDataUrl) {
+                    const nativeImage = await withTimeout(
+                        app.getFileIcon(filePath, { size: 'large' }),
+                        3000,
+                        null
+                    );
+                    if (nativeImage && !nativeImage.isEmpty() && isIconValid(nativeImage)) {
+                        iconDataUrl = nativeImage.toDataURL();
+                    }
+                }
+            } catch (e) {
+                console.warn('[DesktopHandlers] URL shortcut icon extraction failed:', e.message);
+            }
+
+            return {
+                name,
+                targetPath: url,      // 对 .url 文件，targetPath 存储的是 URL（如 steam://rungameid/570）
+                args: '',
+                workingDir: '',
+                description: url,
+                icon: iconDataUrl,
+                originalPath: filePath,
+                isUrlShortcut: true,   // 标记为 URL 快捷方式，启动时使用 shell.openExternal
+            };
+        } catch (e) {
+            console.warn(`[DesktopHandlers] Failed to parse .url file: ${filePath}`, e.message);
+            return null;
+        }
+    }
+
+    /**
      * 解析 Windows 快捷方式 (.lnk) 文件
      * 返回：{ name, targetPath, args, icon (DataURL), workingDir }
      */
     ipcMain.handle('desktop-shortcut-parse', async (event, filePath) => {
         try {
-            if (!filePath || !filePath.toLowerCase().endsWith('.lnk')) {
+            if (!filePath) {
+                return { success: false, error: '不是有效的快捷方式文件' };
+            }
+
+            // 支持 .url 文件
+            if (filePath.toLowerCase().endsWith('.url')) {
+                const result = await parseUrlShortcut(filePath);
+                if (result) {
+                    return { success: true, shortcut: result };
+                }
+                return { success: false, error: '无法解析 .url 快捷方式' };
+            }
+
+            if (!filePath.toLowerCase().endsWith('.lnk')) {
                 return { success: false, error: '不是有效的快捷方式文件' };
             }
 
@@ -371,7 +623,11 @@ function initialize(params) {
             try {
                 // 优先从目标可执行文件提取图标
                 const iconTarget = targetPath || filePath;
-                const nativeImage = await app.getFileIcon(iconTarget, { size: 'large' });
+                const nativeImage = await withTimeout(
+                    app.getFileIcon(iconTarget, { size: 'large' }),
+                    3000,
+                    null
+                );
                 if (nativeImage && !nativeImage.isEmpty() && isIconValid(nativeImage)) {
                     iconDataUrl = nativeImage.toDataURL();
                 }
@@ -379,7 +635,11 @@ function initialize(params) {
                 console.warn('[DesktopHandlers] Icon extraction failed:', iconErr.message);
                 // 尝试从 .lnk 文件本身提取图标
                 try {
-                    const nativeImage = await app.getFileIcon(filePath, { size: 'large' });
+                    const nativeImage = await withTimeout(
+                        app.getFileIcon(filePath, { size: 'large' }),
+                        3000,
+                        null
+                    );
                     if (nativeImage && !nativeImage.isEmpty() && isIconValid(nativeImage)) {
                         iconDataUrl = nativeImage.toDataURL();
                     }
@@ -417,7 +677,18 @@ function initialize(params) {
             const results = [];
             for (const filePath of filePaths) {
                 try {
-                    if (!filePath.toLowerCase().endsWith('.lnk')) continue;
+                    const lowerPath = filePath.toLowerCase();
+
+                    // 支持 .url 文件（Steam 等应用的快捷方式）
+                    if (lowerPath.endsWith('.url')) {
+                        const urlResult = await parseUrlShortcut(filePath);
+                        if (urlResult) {
+                            results.push(urlResult);
+                        }
+                        continue;
+                    }
+
+                    if (!lowerPath.endsWith('.lnk')) continue;
 
                     let shortcutDetails;
                     try {
@@ -432,13 +703,21 @@ function initialize(params) {
                     let iconDataUrl = '';
                     try {
                         const iconTarget = targetPath || filePath;
-                        const nativeImage = await app.getFileIcon(iconTarget, { size: 'large' });
+                        const nativeImage = await withTimeout(
+                            app.getFileIcon(iconTarget, { size: 'large' }),
+                            3000,
+                            null
+                        );
                         if (nativeImage && !nativeImage.isEmpty() && isIconValid(nativeImage)) {
                             iconDataUrl = nativeImage.toDataURL();
                         }
                     } catch (e) {
                         try {
-                            const nativeImage = await app.getFileIcon(filePath, { size: 'large' });
+                            const nativeImage = await withTimeout(
+                                app.getFileIcon(filePath, { size: 'large' }),
+                                3000,
+                                null
+                            );
                             if (nativeImage && !nativeImage.isEmpty() && isIconValid(nativeImage)) {
                                 iconDataUrl = nativeImage.toDataURL();
                             }
@@ -472,15 +751,22 @@ function initialize(params) {
      */
     ipcMain.handle('desktop-shortcut-launch', async (event, shortcutData) => {
         try {
-            const { targetPath, args, workingDir, originalPath } = shortcutData;
+            const { targetPath, args, workingDir, originalPath, isUrlShortcut } = shortcutData;
 
             if (!targetPath && !originalPath) {
                 return { success: false, error: '缺少目标路径' };
             }
 
-            // 优先使用 shell.openPath 打开原始 .lnk 文件（保留完整的快捷方式配置如管理员权限等）
+            // URL 快捷方式（如 steam://rungameid/570）：使用 shell.openExternal 打开
+            if (isUrlShortcut || (targetPath && /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(targetPath))) {
+                console.log(`[DesktopHandlers] Launching URL shortcut: ${targetPath}`);
+                await shell.openExternal(targetPath);
+                return { success: true };
+            }
+
+            // 优先使用 shell.openPath 打开原始 .lnk/.url 文件（保留完整的快捷方式配置如管理员权限等）
             if (originalPath && await fs.pathExists(originalPath)) {
-                console.log(`[DesktopHandlers] Launching shortcut via .lnk: ${originalPath}`);
+                console.log(`[DesktopHandlers] Launching shortcut via original file: ${originalPath}`);
                 const errorMsg = await shell.openPath(originalPath);
                 if (errorMsg) {
                     return { success: false, error: errorMsg };
@@ -527,9 +813,25 @@ function initialize(params) {
                     const files = await fs.readdir(desktopPath);
 
                     for (const file of files) {
-                        if (!file.toLowerCase().endsWith('.lnk')) continue;
-
+                        const lowerFile = file.toLowerCase();
                         const filePath = path.join(desktopPath, file);
+
+                        // 处理 .url 文件（Steam 等应用的快捷方式）
+                        if (lowerFile.endsWith('.url')) {
+                            try {
+                                const urlResult = await parseUrlShortcut(filePath);
+                                if (urlResult) {
+                                    shortcuts.push(urlResult);
+                                }
+                            } catch (e) {
+                                console.warn(`[DesktopHandlers] Cannot parse .url: ${file}`, e.message);
+                            }
+                            continue;
+                        }
+
+                        // 处理 .lnk 文件
+                        if (!lowerFile.endsWith('.lnk')) continue;
+
                         try {
                             const shortcutDetails = shell.readShortcutLink(filePath);
                             const targetPath = shortcutDetails.target || '';
@@ -538,7 +840,11 @@ function initialize(params) {
                             let iconDataUrl = '';
                             try {
                                 const iconTarget = targetPath || filePath;
-                                const nativeImage = await app.getFileIcon(iconTarget, { size: 'large' });
+                                const nativeImage = await withTimeout(
+                                    app.getFileIcon(iconTarget, { size: 'large' }),
+                                    3000,
+                                    null
+                                );
                                 if (nativeImage && !nativeImage.isEmpty() && isIconValid(nativeImage)) {
                                     iconDataUrl = nativeImage.toDataURL();
                                 }
@@ -566,7 +872,7 @@ function initialize(params) {
             // 按名称排序
             shortcuts.sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
 
-            console.log(`[DesktopHandlers] Scanned ${shortcuts.length} shortcuts from Windows desktop`);
+            console.log(`[DesktopHandlers] Scanned ${shortcuts.length} shortcuts from Windows desktop (including .url)`);
             return { success: true, shortcuts };
         } catch (err) {
             console.error('[DesktopHandlers] Scan shortcuts error:', err);
@@ -663,7 +969,7 @@ function initialize(params) {
                 if (!entry.isDirectory()) continue;
                 const presetDir = path.join(ICONSET_DIR, entry.name);
                 const files = await fs.readdir(presetDir);
-                const iconFiles = files.filter(f => /\.(png|jpg|jpeg|svg|ico|webp)$/i.test(f));
+                const iconFiles = files.filter(f => /\.(png|jpg|jpeg|svg|ico|webp|gif|html|htm)$/i.test(f));
                 presets.push({
                     name: entry.name,
                     iconCount: iconFiles.length,
@@ -692,7 +998,7 @@ function initialize(params) {
             }
 
             const files = await fs.readdir(presetDir);
-            let iconFiles = files.filter(f => /\.(png|jpg|jpeg|svg|ico|webp)$/i.test(f));
+            let iconFiles = files.filter(f => /\.(png|jpg|jpeg|svg|ico|webp|gif|html|htm)$/i.test(f));
 
             // 搜索过滤
             if (search) {
@@ -706,12 +1012,22 @@ function initialize(params) {
             const startIndex = (page - 1) * pageSize;
             const pagedFiles = iconFiles.slice(startIndex, startIndex + pageSize);
 
-            const icons = pagedFiles.map(f => ({
-                name: path.basename(f, path.extname(f)),
-                fileName: f,
-                // 相对于项目根目录的路径，前端使用 ../assets/iconset/... 访问
-                relativePath: `assets/iconset/${presetName}/${f}`,
-            }));
+            const icons = pagedFiles.map(f => {
+                const ext = path.extname(f).toLowerCase();
+                // 判断图标类型
+                let iconType = 'image'; // 默认为图片（png/jpg/svg/ico/webp）
+                if (ext === '.gif') iconType = 'gif';
+                else if (ext === '.html' || ext === '.htm') iconType = 'html';
+                else if (ext === '.svg') iconType = 'svg';
+
+                return {
+                    name: path.basename(f, ext),
+                    fileName: f,
+                    iconType,
+                    // 相对于项目根目录的路径，前端使用 ../assets/iconset/... 访问
+                    relativePath: `assets/iconset/${presetName}/${f}`,
+                };
+            });
 
             return { success: true, icons, total, page, pageSize };
         } catch (err) {
@@ -732,20 +1048,42 @@ function initialize(params) {
                 return { success: false, error: '图标文件不存在' };
             }
 
-            const buffer = await fs.readFile(fullPath);
             const ext = path.extname(fullPath).toLowerCase();
+
+            // HTML 图标：返回 HTML 内容字符串（用于 Shadow DOM 渲染）
+            if (ext === '.html' || ext === '.htm') {
+                const htmlContent = await fs.readFile(fullPath, 'utf-8');
+                return { success: true, dataUrl: null, htmlContent, iconType: 'html' };
+            }
+
+            // GIF 图标：返回 Data URL
+            if (ext === '.gif') {
+                const buffer = await fs.readFile(fullPath);
+                const dataUrl = `data:image/gif;base64,${buffer.toString('base64')}`;
+                return { success: true, dataUrl, iconType: 'gif' };
+            }
+
+            // SVG 图标：返回 Data URL + 原始 SVG 文本（供内联使用）
+            if (ext === '.svg') {
+                const buffer = await fs.readFile(fullPath);
+                const svgContent = buffer.toString('utf-8');
+                const dataUrl = `data:image/svg+xml;base64,${buffer.toString('base64')}`;
+                return { success: true, dataUrl, svgContent, iconType: 'svg' };
+            }
+
+            // 其他图片格式：返回 Data URL
+            const buffer = await fs.readFile(fullPath);
             const mimeTypes = {
                 '.png': 'image/png',
                 '.jpg': 'image/jpeg',
                 '.jpeg': 'image/jpeg',
-                '.svg': 'image/svg+xml',
                 '.ico': 'image/x-icon',
                 '.webp': 'image/webp',
             };
             const mime = mimeTypes[ext] || 'image/png';
             const dataUrl = `data:${mime};base64,${buffer.toString('base64')}`;
 
-            return { success: true, dataUrl };
+            return { success: true, dataUrl, iconType: 'image' };
         } catch (err) {
             console.error('[DesktopHandlers] Get icon data error:', err);
             return { success: false, error: err.message };
@@ -839,7 +1177,174 @@ function initialize(params) {
         }
     });
 
-    console.log('[DesktopHandlers] Initialized (with favorites, vcpAPI, shortcuts, dock, layout, iconset & wallpaper system).');
+    // ============================================================
+    // --- IPC: VChat 内部应用启动 ---
+    // ============================================================
+
+    /**
+     * 根据 appAction 启动对应的 VChat 子应用窗口
+     * 这是桌面模块调用系统内部各子应用的统一入口
+     *
+     * 对于有导出函数的模块（notes, rag, canvas），直接 require 并调用。
+     * 对于只有 ipcMain.on 注册的模块（forum, memo, music, themes），
+     * 在这里直接实现窗口创建逻辑（与 windowHandlers.js 保持一致的单例管理）。
+     */
+    ipcMain.handle('desktop-launch-vchat-app', async (event, appAction) => {
+        try {
+            console.log(`[DesktopHandlers] Launching VChat app: ${appAction}`);
+
+            switch (appAction) {
+                case 'show-main-window': {
+                    // 尝试找到主窗口（可能通过 initialize 传入，也可能需要从所有窗口中查找）
+                    let targetMainWindow = mainWindow;
+                    if (!targetMainWindow || targetMainWindow.isDestroyed()) {
+                        // 在所有窗口中查找加载了 main.html 的窗口
+                        const allWindows = BrowserWindow.getAllWindows();
+                        targetMainWindow = allWindows.find(win => {
+                            if (win.isDestroyed()) return false;
+                            const url = win.webContents.getURL();
+                            return url.includes('main.html') && !url.includes('desktop.html');
+                        });
+                    }
+                    if (targetMainWindow && !targetMainWindow.isDestroyed()) {
+                        if (!targetMainWindow.isVisible()) targetMainWindow.show();
+                        if (targetMainWindow.isMinimized()) targetMainWindow.restore();
+                        targetMainWindow.focus();
+                    } else {
+                        return { success: false, error: '主窗口不可用（可能未启动或已关闭）' };
+                    }
+                    return { success: true };
+                }
+
+                case 'open-notes-window': {
+                    const notesHandlers = require('./notesHandlers');
+                    notesHandlers.createOrFocusNotesWindow();
+                    return { success: true };
+                }
+
+                case 'open-memo-window': {
+                    // 优先检查是否已有 memo 窗口存在（可能由 windowHandlers 创建）
+                    const existingMemo = findWindowByUrl('memo.html');
+                    if (existingMemo) {
+                        if (!existingMemo.isVisible()) existingMemo.show();
+                        existingMemo.focus();
+                    } else {
+                        vchatMemoWindow = createOrFocusChildWindow(vchatMemoWindow, {
+                            width: 1200, height: 800, minWidth: 800, minHeight: 600,
+                            title: 'VCP Memo 中心',
+                            htmlPath: path.join(app.getAppPath(), 'Memomodules', 'memo.html'),
+                        });
+                    }
+                    return { success: true };
+                }
+
+                case 'open-forum-window': {
+                    // 优先检查是否已有 forum 窗口存在（可能由 windowHandlers 创建）
+                    const existingForum = findWindowByUrl('forum.html');
+                    if (existingForum) {
+                        if (!existingForum.isVisible()) existingForum.show();
+                        existingForum.focus();
+                    } else {
+                        vchatForumWindow = createOrFocusChildWindow(vchatForumWindow, {
+                            width: 1200, height: 800, minWidth: 800, minHeight: 600,
+                            title: 'VCP 论坛',
+                            htmlPath: path.join(app.getAppPath(), 'Forummodules', 'forum.html'),
+                        });
+                    }
+                    return { success: true };
+                }
+
+                case 'open-rag-observer-window': {
+                    const ragHandlers = require('./ragHandlers');
+                    await ragHandlers.openRagObserverWindow();
+                    return { success: true };
+                }
+
+                case 'open-dice-window': {
+                    // 骰子窗口需要先启动本地 express 服务器，
+                    // 通过桌面窗口的渲染进程间接调用 electronAPI.openDiceWindow()
+                    // 这会触发已注册的 ipcMain.handle('open-dice-window')
+                    if (desktopWindow && !desktopWindow.isDestroyed()) {
+                        desktopWindow.webContents.executeJavaScript(`window.electronAPI?.openDiceWindow()`).catch(() => {});
+                    } else if (mainWindow && !mainWindow.isDestroyed()) {
+                        mainWindow.webContents.executeJavaScript(`window.electronAPI?.openDiceWindow()`).catch(() => {});
+                    }
+                    return { success: true };
+                }
+
+                case 'open-canvas-window': {
+                    const canvasHandlers = require('./canvasHandlers');
+                    await canvasHandlers.createCanvasWindow();
+                    return { success: true };
+                }
+
+                case 'open-translator-window': {
+                    // 读取设置获取 API 凭据
+                    let settings = {};
+                    try {
+                        const settingsPath = path.join(PROJECT_ROOT, 'AppData', 'settings.json');
+                        if (await fs.pathExists(settingsPath)) {
+                            settings = await fs.readJson(settingsPath);
+                        }
+                    } catch (e) { /* ignore */ }
+
+                    const vcpServerUrl = settings.vcpServerUrl || '';
+                    const vcpApiKey = settings.vcpApiKey || '';
+
+                    vchatTranslatorWindow = createOrFocusChildWindow(vchatTranslatorWindow, {
+                        width: 1000, height: 700, minWidth: 800, minHeight: 600,
+                        title: '翻译',
+                        htmlPath: path.join(app.getAppPath(), 'Translatormodules', 'translator.html'),
+                        queryParams: `vcpServerUrl=${encodeURIComponent(vcpServerUrl)}&vcpApiKey=${encodeURIComponent(vcpApiKey)}`,
+                    });
+                    return { success: true };
+                }
+
+                case 'open-music-window': {
+                    // 音乐窗口需要通过已注册的 ipcMain.on('open-music-window') 打开
+                    // 通过桌面窗口自身的渲染进程触发（桌面窗口加载了相同的 preload.js）
+                    if (desktopWindow && !desktopWindow.isDestroyed()) {
+                        desktopWindow.webContents.executeJavaScript(`window.electron?.send('open-music-window')`).catch(() => {});
+                    } else if (mainWindow && !mainWindow.isDestroyed()) {
+                        mainWindow.webContents.executeJavaScript(`window.electron?.send('open-music-window')`).catch(() => {});
+                    }
+                    return { success: true };
+                }
+
+                case 'open-themes-window': {
+                    vchatThemesWindow = createOrFocusChildWindow(vchatThemesWindow, {
+                        width: 850, height: 700,
+                        title: '主题选择',
+                        htmlPath: path.join(app.getAppPath(), 'Themesmodules', 'themes.html'),
+                    });
+                    return { success: true };
+                }
+
+                default: {
+                    // 处理系统工具启动：appAction 格式为 'open-system-tool:命令'
+                    if (appAction && appAction.startsWith('open-system-tool:')) {
+                        const cmd = appAction.substring('open-system-tool:'.length);
+                        return await launchSystemTool(cmd);
+                    }
+                    console.warn(`[DesktopHandlers] Unknown VChat app action: ${appAction}`);
+                    return { success: false, error: `未知的应用动作: ${appAction}` };
+                }
+            }
+        } catch (err) {
+            console.error(`[DesktopHandlers] VChat app launch error (${appAction}):`, err);
+            return { success: false, error: err.message };
+        }
+    });
+
+    // ============================================================
+    // --- IPC: 打开 Windows 系统工具 ---
+    // ============================================================
+
+    ipcMain.handle('desktop-open-system-tool', async (event, cmd) => {
+        return await launchSystemTool(cmd);
+    });
+
+    console.log('[DesktopHandlers] Initialized (with favorites, vcpAPI, shortcuts, dock, layout, iconset, wallpaper, vchat-apps & system-tools).');
 }
 
 /**
@@ -902,7 +1407,8 @@ async function openDesktopWindow() {
             console.log('[Desktop] Auto-maximized on startup');
         }
 
-        desktopWindow.show();
+        // 使用 showInactive() 避免抢占主窗口焦点
+        desktopWindow.showInactive();
 
         // 窗口自动置底
         if (desktopGlobalSettings.alwaysOnBottom) {

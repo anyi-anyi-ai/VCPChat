@@ -15,6 +15,7 @@
     const BUILTIN_WIDGETS = [
         { id: 'builtinWeather', name: '天气预报', icon: '🌤️', description: '实时天气数据与预报', spawnKey: 'builtinWeather' },
         { id: 'builtinNews', name: '今日热点', icon: '📰', description: '多源新闻热点聚合', spawnKey: 'builtinNews' },
+        { id: 'builtinTranslate', name: 'AI 翻译', icon: '🌐', description: 'AI 驱动的多语言翻译工具', spawnKey: 'builtinTranslate' },
         { id: 'builtinMusic', name: '音乐播放条', icon: '🎵', description: '迷你音乐控制器', spawnKey: 'builtinMusic' },
         { id: 'builtinAppTray', name: '应用托盘', icon: '📦', description: '网格浏览全部应用，拖拽到桌面', spawnKey: 'builtinAppTray' },
     ];
@@ -45,6 +46,14 @@
         if (savePresetBtn) {
             savePresetBtn.addEventListener('click', () => {
                 saveCurrentLayoutAsPreset();
+            });
+        }
+
+        // 新建空白预设按钮
+        const newBlankPresetBtn = document.getElementById('desktop-sidebar-new-blank-preset');
+        if (newBlankPresetBtn) {
+            newBlankPresetBtn.addEventListener('click', () => {
+                createBlankPreset();
             });
         }
 
@@ -338,6 +347,46 @@
     }
 
     /**
+     * 新建空白预设（不包含任何挂件和桌面图标）
+     */
+    async function createBlankPreset() {
+        const name = await showInputModal('新建空白预设', '为空白预设取一个名字：', `空白预设 ${new Date().toLocaleDateString()}`);
+        if (!name || !name.trim()) return;
+
+        const preset = {
+            id: `preset_${Date.now()}`,
+            name: name.trim(),
+            createdAt: Date.now(),
+            widgets: [],
+            desktopIcons: [],
+            dock: {
+                items: state.dock.items.map(i => ({...i})),
+                maxVisible: state.dock.maxVisible,
+            },
+        };
+
+        // 保存到磁盘
+        if (window.electronAPI?.desktopSaveLayout) {
+            try {
+                const existing = await loadPresetsFromDisk();
+                existing.push(preset);
+                await savePresetsAndKeepSettings(existing);
+
+                if (window.VCPDesktop.status) {
+                    window.VCPDesktop.status.update('connected', `空白预设已创建: ${name}`);
+                    window.VCPDesktop.status.show();
+                    setTimeout(() => window.VCPDesktop.status.hide(), 3000);
+                }
+
+                // 刷新列表
+                loadPresetList();
+            } catch (err) {
+                console.error('[Sidebar] Create blank preset error:', err);
+            }
+        }
+    }
+
+    /**
      * 从磁盘加载预设列表
      */
     async function loadPresetsFromDisk() {
@@ -472,6 +521,10 @@
     async function applyPreset(preset) {
         const D = window.VCPDesktop;
 
+        // 记录上次加载的预设（用于桌面右键菜单"保存当前预设"检测）
+        state.lastLoadedPresetId = preset.id;
+        state.lastLoadedPresetName = preset.name;
+
         // 清除当前桌面
         D.widget.clearAll();
 
@@ -506,10 +559,15 @@
             }
         }
 
-        // 恢复桌面图标
+        // 恢复桌面图标（使用精确坐标，不触发自动保存）
         if (preset.desktopIcons && preset.desktopIcons.length > 0 && D.dock) {
             for (const icon of preset.desktopIcons) {
-                D.dock.createDesktopIcon(icon, icon.x + 32, icon.y + 32);
+                icon._exactPos = true;
+                D.dock.createDesktopIcon(icon, icon.x || 100, icon.y || 100);
+            }
+            // 预设恢复后，手动保存一次桌面图标到 currentDesktopIcons
+            if (D.dock.saveDesktopIcons) {
+                setTimeout(() => D.dock.saveDesktopIcons(), 500);
             }
         }
 

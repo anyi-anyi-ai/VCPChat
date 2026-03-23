@@ -42,6 +42,7 @@ const ragHandlers = require('./modules/ipc/ragHandlers'); // Import RAG handlers
 // speechRecognizer is now lazy-loaded
 const canvasHandlers = require('./modules/ipc/canvasHandlers'); // Import canvas handlers
 const desktopHandlers = require('./modules/ipc/desktopHandlers'); // Import VCPdesktop handlers
+const desktopRemoteHandlers = require('./modules/ipc/desktopRemoteHandlers'); // Import desktop remote control handlers
 // chokidar is now lazy-loaded
 
 // --- File Watcher ---
@@ -946,6 +947,7 @@ if (!gotTheLock) {
         emoticonHandlers.setupEmoticonHandlers();
         canvasHandlers.initialize({ mainWindow, openChildWindows, CANVAS_CACHE_DIR });
         desktopHandlers.initialize({ mainWindow, openChildWindows, settingsManager: appSettingsManager });
+        desktopRemoteHandlers.initialize({ mainWindow });
         promptHandlers.initialize({ AGENT_DIR, APP_DATA_ROOT_IN_PROJECT });
 
         ipcMain.on('minimize-to-tray', () => {
@@ -969,8 +971,9 @@ if (!gotTheLock) {
                         rendererProcess: mainWindow.webContents, // Pass the renderer process object
                         handleMusicControl: musicHandlers.handleMusicControl, // Inject the music control handler
                         handleDiceControl: diceHandlers.handleDiceControl, // Inject the dice control handler
-                        handleCanvasControl: handleCanvasControl, // Inject the canvas control handler
-                        handleFlowlockControl: handleFlowlockControl // Inject the flowlock control handler
+                        handleCanvasControl: desktopRemoteHandlers.handleCanvasControl, // Inject the canvas control handler
+                        handleFlowlockControl: desktopRemoteHandlers.handleFlowlockControl, // Inject the flowlock control handler
+                        handleDesktopRemoteControl: desktopRemoteHandlers.handleDesktopRemoteControl // Inject the desktop remote control handler
                     };
                     distributedServer = new DistributedServer(config);
                     distributedServer.initialize();
@@ -1328,24 +1331,6 @@ ipcMain.handle('export-topic-as-markdown', async (event, exportData) => {
     }
 });
 
-// --- Canvas Control Handler (for Distributed Server) ---
-async function handleCanvasControl(filePath) {
-    try {
-        if (!filePath) {
-            throw new Error('No filePath provided for canvas control.');
-        }
-
-        // The updated createCanvasWindow now handles both opening the window
-        // and loading the specific file, or focusing and loading if already open.
-        await canvasHandlers.createCanvasWindow(filePath);
-
-        return { status: 'success', message: 'Canvas window command processed.' };
-    } catch (error) {
-        console.error('[Main] handleCanvasControl error:', error);
-        return { status: 'error', message: error.message };
-    }
-}
-
 // --- Group Chat Interrupt Handler ---
 ipcMain.handle('interrupt-group-request', (event, messageId) => {
     console.log(`[Main] Received interrupt-group-request for messageId: ${messageId}`);
@@ -1357,111 +1342,6 @@ ipcMain.handle('interrupt-group-request', (event, messageId) => {
     }
 });
 
-// --- Flowlock Control Handler (for Distributed Server) ---
-async function handleFlowlockControl(commandPayload) {
-    try {
-        const { command, agentId, topicId, prompt, promptSource, target, oldText, newText } = commandPayload;
-
-        console.log(`[Main] handleFlowlockControl received command: ${command}`, commandPayload);
-
-        if (!mainWindow || mainWindow.isDestroyed()) {
-            throw new Error('Main window is not available.');
-        }
-
-        // For 'get' and 'status' commands, we need to wait for a response from renderer
-        if (command === 'get' || command === 'status') {
-            return new Promise((resolve, reject) => {
-                const timeout = setTimeout(() => {
-                    reject(new Error(`${command === 'get' ? '获取输入框内容' : '获取心流锁状态'}超时`));
-                }, 5000); // 5 second timeout
-
-                // Set up one-time listener for the response
-                const responseHandler = (event, responseData) => {
-                    clearTimeout(timeout);
-                    ipcMain.removeListener('flowlock-response', responseHandler);
-
-                    if (responseData.success) {
-                        if (command === 'get') {
-                            resolve({
-                                status: 'success',
-                                message: `输入框当前内容为: "${responseData.content}"`,
-                                content: responseData.content
-                            });
-                        } else if (command === 'status') {
-                            const statusInfo = responseData.status;
-                            const statusText = statusInfo.isActive
-                                ? `心流锁已启用 (Agent: ${statusInfo.agentId}, Topic: ${statusInfo.topicId}, 处理中: ${statusInfo.isProcessing ? '是' : '否'})`
-                                : '心流锁未启用';
-                            resolve({
-                                status: 'success',
-                                message: statusText,
-                                flowlockStatus: statusInfo
-                            });
-                        }
-                    } else {
-                        reject(new Error(responseData.error || `${command === 'get' ? '获取输入框内容' : '获取心流锁状态'}失败`));
-                    }
-                };
-
-                ipcMain.on('flowlock-response', responseHandler);
-
-                // Send command to renderer
-                mainWindow.webContents.send('flowlock-command', {
-                    command,
-                    agentId,
-                    topicId,
-                    prompt,
-                    promptSource,
-                    target,
-                    oldText,
-                    newText
-                });
-            });
-        }
-
-        // For other commands, send and return immediately
-        mainWindow.webContents.send('flowlock-command', {
-            command,
-            agentId,
-            topicId,
-            prompt,
-            promptSource,
-            target,
-            oldText,
-            newText
-        });
-
-        // Build natural language response for AI
-        let naturalResponse = '';
-        switch (command) {
-            case 'start':
-                naturalResponse = `已为 Agent "${agentId}" 的话题 "${topicId}" 启动心流锁。`;
-                break;
-            case 'stop':
-                naturalResponse = `已停止心流锁。`;
-                break;
-            case 'promptee':
-                naturalResponse = `已设置下次续写提示词为: "${prompt}"`;
-                break;
-            case 'prompter':
-                naturalResponse = `已从来源 "${promptSource}" 获取提示词。`;
-                break;
-            case 'clear':
-                naturalResponse = `已清空输入框中的所有提示词。`;
-                break;
-            case 'remove':
-                naturalResponse = `已从输入框中移除: "${target}"`;
-                break;
-            case 'edit':
-                naturalResponse = `已将 "${oldText}" 编辑为 "${newText}"`;
-                break;
-            default:
-                naturalResponse = `心流锁命令 "${command}" 已执行。`;
-        }
-
-        return { status: 'success', message: naturalResponse };
-    } catch (error) {
-        console.error('[Main] handleFlowlockControl error:', error);
-        return { status: 'error', message: error.message };
-    }
-}
+// --- Desktop Remote Control, Canvas Control, and Flowlock Control handlers ---
+// These have been modularized into modules/ipc/desktopRemoteHandlers.js
+// They are injected into the DistributedServer via desktopRemoteHandlers.handleDesktopRemoteControl, etc.

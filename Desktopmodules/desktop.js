@@ -56,6 +56,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (D.wallpaper) {
         D.wallpaper.init();
     }
+    // 初始化窗口可见性冻结系统
+    if (D.visibilityFreezer) {
+        D.visibilityFreezer.init();
+    }
     D.status.update('waiting', '等待主窗口连接...');
     setTimeout(() => {
         D.status.hide();
@@ -70,6 +74,23 @@ document.addEventListener('DOMContentLoaded', () => {
     // 5.5. 初始化 Dock 栏
     if (D.dock) {
         D.dock.init();
+    }
+
+    // 5.5.1. 注入 VChat 内部应用到 Dock
+    // 在 Dock 加载配置完成后（loadDockConfig 是异步的），延迟注入确保不覆盖已有配置
+    if (D.vchatApps) {
+        // 给 Dock 配置加载留出时间后再注入
+        setTimeout(() => {
+            D.vchatApps.inject();
+        }, 500);
+    }
+
+    // 5.5.2. 恢复桌面图标（在 Dock 配置加载完成后延迟恢复）
+    // 如果设置了默认预设，applyPreset 会先清除所有桌面图标再恢复预设中的图标，不会冲突
+    if (D.dock && D.dock.restoreDesktopIcons) {
+        setTimeout(() => {
+            D.dock.restoreDesktopIcons();
+        }, 600);
     }
 
     // 5.6. 初始化全局设置

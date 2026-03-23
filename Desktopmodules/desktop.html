@@ -78,6 +78,9 @@
                 <span class="desktop-dock-drawer-title">📦 全部应用</span>
                 <button id="desktop-dock-drawer-close" class="desktop-dock-drawer-close-btn" title="关闭">✕</button>
             </div>
+            <div class="desktop-dock-drawer-search-wrapper">
+                <input type="text" id="desktop-dock-drawer-search" class="desktop-dock-drawer-search" placeholder="搜索应用..." />
+            </div>
             <div id="desktop-dock-drawer-list">
                 <div class="desktop-dock-drawer-empty">暂无应用</div>
             </div>
@@ -137,6 +140,7 @@
         <div id="desktop-sidebar-page-presets" class="desktop-sidebar-page">
             <div class="desktop-sidebar-preset-actions">
                 <button id="desktop-sidebar-save-preset" class="desktop-sidebar-preset-btn">💾 保存当前布局</button>
+                <button id="desktop-sidebar-new-blank-preset" class="desktop-sidebar-preset-btn desktop-sidebar-preset-btn-blank">📄 新建空白预设</button>
             </div>
             <div id="desktop-sidebar-preset-list" class="desktop-sidebar-list">
                 <div class="desktop-sidebar-empty">暂无布局预设</div>
@@ -256,10 +260,42 @@
                             <span class="desktop-settings-toggle-slider"></span>
                         </label>
                     </div>
+                    <div class="desktop-settings-item">
+                        <div class="desktop-settings-item-label">
+                            <div class="desktop-settings-item-label-text">最小化时冻结动画</div>
+                            <div class="desktop-settings-item-label-desc">窗口最小化或被遮挡时自动暂停动画以节省资源</div>
+                        </div>
+                        <label class="desktop-settings-toggle">
+                            <input type="checkbox" id="desktop-setting-visibility-freezer" checked>
+                            <span class="desktop-settings-toggle-slider"></span>
+                        </label>
+                    </div>
                 </div>
                 <!-- Dock 栏 -->
                 <div class="desktop-settings-section">
                     <div class="desktop-settings-section-title">Dock 栏</div>
+                    <div class="desktop-settings-item">
+                        <div class="desktop-settings-item-label">
+                            <div class="desktop-settings-item-label-text">Dock 位置</div>
+                            <div class="desktop-settings-item-label-desc">选择 Dock 栏停靠的屏幕边缘</div>
+                        </div>
+                        <div class="desktop-settings-dock-position">
+                            <button class="desktop-settings-dock-pos-btn" data-pos="top" title="顶部">⬆</button>
+                            <button class="desktop-settings-dock-pos-btn" data-pos="left" title="左侧">⬅</button>
+                            <button class="desktop-settings-dock-pos-btn active" data-pos="bottom" title="底部">⬇</button>
+                            <button class="desktop-settings-dock-pos-btn" data-pos="right" title="右侧">➡</button>
+                        </div>
+                    </div>
+                    <div class="desktop-settings-item">
+                        <div class="desktop-settings-item-label">
+                            <div class="desktop-settings-item-label-text">边缘距离</div>
+                            <div class="desktop-settings-item-label-desc">Dock 栏距屏幕边缘的距离</div>
+                        </div>
+                        <div class="desktop-settings-range-wrapper">
+                            <input type="range" class="desktop-settings-range" id="desktop-setting-dock-edge-distance" min="0" max="60" value="12" step="2">
+                            <span class="desktop-settings-range-label" id="desktop-setting-dock-edge-distance-label">12px</span>
+                        </div>
+                    </div>
                     <div class="desktop-settings-item">
                         <div class="desktop-settings-item-label">
                             <div class="desktop-settings-item-label-text">默认显示图标数</div>
@@ -279,6 +315,30 @@
                         <div class="desktop-settings-range-wrapper">
                             <input type="range" class="desktop-settings-range" id="desktop-setting-dock-size" min="20" max="56" value="32" step="2">
                             <span class="desktop-settings-range-label" id="desktop-setting-dock-size-label">32px</span>
+                        </div>
+                    </div>
+                </div>
+                <!-- 桌面图标 -->
+                <div class="desktop-settings-section">
+                    <div class="desktop-settings-section-title">桌面图标</div>
+                    <div class="desktop-settings-item">
+                        <div class="desktop-settings-item-label">
+                            <div class="desktop-settings-item-label-text">网格对齐</div>
+                            <div class="desktop-settings-item-label-desc">拖拽应用图标松手后自动吸附到网格位置</div>
+                        </div>
+                        <label class="desktop-settings-toggle">
+                            <input type="checkbox" id="desktop-setting-icon-grid-snap">
+                            <span class="desktop-settings-toggle-slider"></span>
+                        </label>
+                    </div>
+                    <div class="desktop-settings-item">
+                        <div class="desktop-settings-item-label">
+                            <div class="desktop-settings-item-label-text">图标大小</div>
+                            <div class="desktop-settings-item-label-desc">桌面应用快捷方式图标的显示尺寸</div>
+                        </div>
+                        <div class="desktop-settings-range-wrapper">
+                            <input type="range" class="desktop-settings-range" id="desktop-setting-icon-size" min="24" max="72" value="40" step="4">
+                            <span class="desktop-settings-range-label" id="desktop-setting-icon-size-label">40px</span>
                         </div>
                     </div>
                 </div>
@@ -305,6 +365,8 @@
     <script src="core/theme.js"></script>
     <!-- 2.5. 核心层：壁纸管理 -->
     <script src="core/wallpaperManager.js"></script>
+    <!-- 2.6. 核心层：窗口可见性冻结（依赖 state） -->
+    <script src="core/visibilityFreezer.js"></script>
     <!-- 3. 核心层：状态指示器（依赖 state） -->
     <script src="core/statusIndicator.js"></script>
     <!-- 4. 核心层：Z-Index 管理（依赖 state） -->
@@ -339,8 +401,12 @@
     <script src="builtinWidgets/musicWidget.js"></script>
     <!-- 16. 内置挂件：新闻热点 -->
     <script src="builtinWidgets/newsWidget.js"></script>
+    <!-- 16.2. 内置挂件：AI 翻译 -->
+    <script src="builtinWidgets/translateWidget.js"></script>
     <!-- 16.5. 内置挂件：应用托盘 -->
     <script src="builtinWidgets/appTrayWidget.js"></script>
+    <!-- 16.6. VChat 内部应用注册表 & 启动器 -->
+    <script src="builtinWidgets/vchatApps.js"></script>
     <!-- 17. 调试工具 -->
     <script src="debug/debugTools.js"></script>
     <!-- 18. 主入口：初始化编排 -->
