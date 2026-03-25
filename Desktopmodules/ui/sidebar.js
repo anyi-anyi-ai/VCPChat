@@ -323,6 +323,7 @@
                 items: state.dock.items.map(i => ({...i})),
                 maxVisible: state.dock.maxVisible,
             },
+            wallpaper: state.globalSettings.wallpaper ? { ...state.globalSettings.wallpaper } : null,
         };
 
         // 保存到磁盘
@@ -363,6 +364,17 @@
             dock: {
                 items: state.dock.items.map(i => ({...i})),
                 maxVisible: state.dock.maxVisible,
+            },
+            wallpaper: {
+                enabled: false,
+                type: 'none',
+                source: '',
+                filePath: '',
+                opacity: 1,
+                blur: 0,
+                brightness: 1,
+                videoMuted: true,
+                videoPlaybackRate: 1,
             },
         };
 
@@ -583,6 +595,19 @@
             // 预设恢复后，手动保存一次桌面图标到 currentDesktopIcons
             if (D.dock.saveDesktopIcons) {
                 setTimeout(() => D.dock.saveDesktopIcons(), 500);
+            }
+        }
+        
+        // 恢复壁纸
+        if (preset.wallpaper && D.wallpaper) {
+            console.log('[Sidebar] Restoring wallpaper from preset:', preset.wallpaper);
+            // 更新全局设置中的壁纸配置
+            state.globalSettings.wallpaper = { ...preset.wallpaper };
+            // 应用壁纸
+            D.wallpaper.apply(state.globalSettings.wallpaper);
+            // 持久化到 layout.json
+            if (D.globalSettings && D.globalSettings.save) {
+                D.globalSettings.save();
             }
         }
 

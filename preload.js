@@ -84,7 +84,9 @@ contextBridge.exposeInMainWorld('electron', {
             'music-configure-resampling',
             // --- Settings Persistence ---
             'music-get-settings',
-            'music-save-settings'
+            'music-save-settings',
+            // --- Pending Track for AI song request ---
+            'music-get-pending-track'
         ];
         if (validChannels.includes(channel)) {
             return ipcRenderer.invoke(channel, data);
@@ -437,6 +439,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onDesktopRemoteSetWallpaper: (callback) => ipcRenderer.on('desktop-remote-set-wallpaper', (_event, data) => callback(data)),
     onDesktopRemoteQuery: (callback) => ipcRenderer.on('desktop-remote-query', (_event) => callback()),
     sendDesktopRemoteQueryResponse: (data) => ipcRenderer.send('desktop-remote-query-response', data),
+    onDesktopRemoteQueryDock: (callback) => ipcRenderer.on('desktop-remote-query-dock', (_event) => callback()),
+    sendDesktopRemoteQueryDockResponse: (data) => ipcRenderer.send('desktop-remote-query-dock-response', data),
     onDesktopRemoteViewSource: (callback) => ipcRenderer.on('desktop-remote-view-source', (_event, data) => callback(data)),
     sendDesktopRemoteViewSourceResponse: (data) => ipcRenderer.send('desktop-remote-view-source-response', data),
     onDesktopRemoteCreateWidget: (callback) => ipcRenderer.on('desktop-remote-create-widget', (_event, data) => callback(data)),
