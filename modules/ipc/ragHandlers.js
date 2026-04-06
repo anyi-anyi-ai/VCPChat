@@ -12,9 +12,10 @@ let ragOverlayAutoPositioning = false;
 const DEFAULT_RAG_OVERLAY_STATE = {
     enabled: true,
     passThrough: true,
-    opacity: 0.92,
+    opacity: 0.9,
     bounds: null,
-    useCustomBounds: false
+    useCustomBounds: false,
+    notificationCategoryEnabled: false
 };
 
 let ragOverlayState = { ...DEFAULT_RAG_OVERLAY_STATE };
@@ -22,6 +23,7 @@ let appSettingsManager = null;
 let mainWindow = null;
 let openChildWindows = [];
 let SETTINGS_FILE = '';
+let ipcHandlersRegistered = false;
 
 function normalizeRagOverlayState(rawState = {}) {
     const state = rawState && typeof rawState === 'object' ? rawState : {};
@@ -49,7 +51,10 @@ function normalizeRagOverlayState(rawState = {}) {
         passThrough: state.passThrough !== undefined ? !!state.passThrough : DEFAULT_RAG_OVERLAY_STATE.passThrough,
         opacity,
         bounds,
-        useCustomBounds: state.useCustomBounds !== undefined ? !!state.useCustomBounds : !!bounds
+        useCustomBounds: state.useCustomBounds !== undefined ? !!state.useCustomBounds : !!bounds,
+        notificationCategoryEnabled: state.notificationCategoryEnabled !== undefined
+            ? !!state.notificationCategoryEnabled
+            : DEFAULT_RAG_OVERLAY_STATE.notificationCategoryEnabled
     };
 }
 
@@ -70,7 +75,10 @@ function schedulePersistRagOverlayState(immediate = false) {
                         width: Math.max(300, Math.round(ragOverlayState.bounds.width)),
                         height: Math.max(140, Math.round(ragOverlayState.bounds.height))
                     } : null,
-                    useCustomBounds: !!ragOverlayState.useCustomBounds
+                    useCustomBounds: !!ragOverlayState.useCustomBounds,
+                    notificationCategoryEnabled: ragOverlayState.notificationCategoryEnabled !== undefined
+                        ? !!ragOverlayState.notificationCategoryEnabled
+                        : DEFAULT_RAG_OVERLAY_STATE.notificationCategoryEnabled
                 }
             }));
         } catch (error) {
@@ -319,6 +327,10 @@ function initialize(params) {
     appSettingsManager = params.settingsManager;
     SETTINGS_FILE = params.SETTINGS_FILE;
 
+    if (ipcHandlersRegistered) {
+        return;
+    }
+
     ipcMain.handle('open-rag-observer-window', openRagObserverWindow);
 
     ipcMain.on('rag-overlay-show', (event, payload = {}) => {
@@ -410,6 +422,11 @@ function initialize(params) {
         schedulePersistRagOverlayState();
     });
 
+    ipcMain.on('rag-overlay-set-notification-category-enabled', (event, enabled) => {
+        ragOverlayState.notificationCategoryEnabled = !!enabled;
+        schedulePersistRagOverlayState();
+    });
+
     ipcMain.handle('rag-overlay-get-bounds', (event) => {
         const senderWin = BrowserWindow.fromWebContents(event.sender);
         if (!senderWin || senderWin.isDestroyed()) return null;
@@ -422,7 +439,10 @@ function initialize(params) {
             passThrough: !!ragOverlayState.passThrough,
             opacity: Math.min(1, Math.max(0.15, Number(ragOverlayState.opacity) || DEFAULT_RAG_OVERLAY_STATE.opacity)),
             bounds: ragOverlayState.bounds ? { ...ragOverlayState.bounds } : null,
-            useCustomBounds: !!ragOverlayState.useCustomBounds
+            useCustomBounds: !!ragOverlayState.useCustomBounds,
+            notificationCategoryEnabled: ragOverlayState.notificationCategoryEnabled !== undefined
+                ? !!ragOverlayState.notificationCategoryEnabled
+                : DEFAULT_RAG_OVERLAY_STATE.notificationCategoryEnabled
         };
     });
 
@@ -465,6 +485,8 @@ function initialize(params) {
             });
         }
     });
+
+    ipcHandlersRegistered = true;
 }
 
 module.exports = {
