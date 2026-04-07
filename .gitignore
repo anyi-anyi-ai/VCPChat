@@ -38,3 +38,6 @@ vendor/LibreHardwareMonitor/*
 # Large binaries and caches
 bin/
 loudness_cache.db
+
+# 忽略 WebIndexTTS2 生成输出目录
+/WebIndexTTS2/tmp-output/
