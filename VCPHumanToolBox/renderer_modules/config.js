@@ -21,19 +21,42 @@ export const tools = {
         ]
     },
     'ZImageTurboGen': {
-        displayName: 'Z-Image-Turbo 生图',
-        description: '使用 Gitee 提供的 Z-Image-Turbo 生成图片。支持 1k 和 2k 高清分辨率，支持中文和英文提示词。[后端插件: ZImageTurboGen]',
+        displayName: 'Z-Image-Turbo 图片生成/编辑/合成',
+        description: '使用 Z-Image-Turbo 生成、编辑或合成图片。支持中文和英文提示词。[后端插件: ZImageTurboGen]',
         commands: {
-            'GenerateImage': {
+            'generate': {
                 description: '生成图片',
                 params: [
                     { name: 'maid', type: 'text', required: true, placeholder: '你的名字' },
-                    { name: 'prompt', type: 'textarea', required: true, placeholder: '(必需) 用于图片生成的详细提示词，支持中文或英文。' },
+                    { name: 'prompt', type: 'textarea', required: true, placeholder: '(必需) 用于生成、编辑或合成图片的自然语言描述，支持中文或英文。纯文本描述即可，不需要特殊格式。' },
                     { name: 'size', type: 'select', required: false, options: ['1024x1024', '1024x768', '768x1024', '1024x576', '576x1024', '2048x2048', '2048x1536', '1536x2048', '2048x1152', '1152x2048', '2048x1280', '1280x2048'], default: '1024x1024', description: '图片分辨率或比例' },
-                    { name: 'negative_prompt', type: 'textarea', required: false, placeholder: '(可选) 负面提示词，描述不希望在图片中出现的内容，例如 "模糊, 低质量, 变形"。' },
+                    { name: 'negative_prompt', type: 'textarea', required: false, placeholder: '(可选) 不希望出现的内容，例如模糊、低质量、变形、错误文字等。只有Zimage支持该功能。' },
                     { name: 'num_inference_steps', type: 'number', required: false, min: 4, max: 25, default: 9, placeholder: '推理步数，范围 4-25，默认 9' },
                     { name: 'seed', type: 'number', required: false, default: 0, placeholder: '随机种子，默认 0' }
                 ]
+            },
+            'edit': {
+                description: '编辑图片',
+                params: [
+                    { name: 'maid', type: 'text', required: true, placeholder: '你的名字' },
+                    { name: 'prompt', type: 'textarea', required: true, placeholder: '(必需) 用于生成、编辑或合成图片的自然语言描述，支持中文或英文。纯文本描述即可，不需要特殊格式。' },
+                    { name: 'image', type: 'dragdrop_image', required: true, placeholder: '(编辑/合成时必需) 单图URL/base64/data URI，或图片数组，例如["url1","url2"]。也兼容image_url、image_1、image_2、image_url_1、image_base64_1等字段。' },
+                    { name: 'negative_prompt', type: 'textarea', required: false, placeholder: '(可选) 不希望出现的内容，例如模糊、低质量、变形、错误文字等。只有Zimage支持该功能。' },
+                    { name: 'num_inference_steps', type: 'number', required: false, min: 4, max: 25, default: 9, placeholder: '推理步数，范围 4-25，默认 9' },
+                    { name: 'seed', type: 'number', required: false, default: 0, placeholder: '随机种子，默认 0' }
+                ]
+            },
+            'compose': {
+                description: '合成图片',
+                params: [
+                    { name: 'maid', type: 'text', required: true, placeholder: '你的名字' },
+                    { name: 'prompt', type: 'textarea', required: true, placeholder: '(必需) 用于生成、编辑或合成图片的自然语言描述，支持中文或英文。纯文本描述即可，不需要特殊格式。' },
+                    { name: 'image', type: 'dragdrop_image', required: true, placeholder: '(编辑/合成时必需) 单图URL/base64/data URI，或图片数组，例如["url1","url2"]。也兼容image_url、image_1、image_2、image_url_1、image_base64_1等字段。' },
+                    { name: 'negative_prompt', type: 'textarea', required: false, placeholder: '(可选) 不希望出现的内容，例如模糊、低质量、变形、错误文字等。只有Zimage支持该功能。' },
+                    { name: 'num_inference_steps', type: 'number', required: false, min: 4, max: 25, default: 9, placeholder: '推理步数，范围 4-25，默认 9' },
+                    { name: 'seed', type: 'number', required: false, default: 0, placeholder: '随机种子，默认 0' }
+                ],
+                dynamicImages: true
             }
         }
     },
@@ -320,6 +343,55 @@ export const tools = {
             { name: 'start_date', type: 'text', required: false, placeholder: 'YYYY-MM-DD' },
             { name: 'end_date', type: 'text', required: false, placeholder: 'YYYY-MM-DD' }
         ]
+    },
+    'AnySearch': {
+        displayName: '高级垂直搜索',
+        description: '高级垂直搜索插件，支持通用搜索、领域列表、批量搜索与网页正文提取。复杂垂直搜索前建议先调用 list_domains 获取 sub_domain、query_format、params_schema 和 zone 约束。[后端插件: AnySearch]',
+        commands: {
+            'search': {
+                description: '搜索',
+                params: [
+                    { name: 'maid', type: 'text', required: true, placeholder: '你的名字' },
+                    { name: 'query', type: 'textarea', required: true, placeholder: 'AI regulation 2026。垂直搜索时必须遵循 list_domains 返回的 query_format。也兼容 q、text 字段。' },
+                    { name: 'domain', type: 'text', required: false, placeholder: '垂直领域，如 finance、academic、security、code、tech、legal' },
+                    { name: 'sub_domain', type: 'text', required: false, placeholder: '子领域路由，如 finance.us_stock、academic.doi、security.cve' },
+                    { name: 'sub_domain_params', type: 'textarea', required: false, placeholder: '子领域额外参数，支持 JSON 对象或字符串' },
+                    { name: 'content_types', type: 'text', required: false, placeholder: 'web、news、code、doc、academic、data、image、video、audio；支持单值或数组' },
+                    { name: 'zone', type: 'select', required: false, options: ['', 'cn', 'intl'], description: '地域约束；当 list_domains 标记 zone=CN 时必须传 cn' },
+                    { name: 'max_results', type: 'number', required: false, min: 1, max: 100, placeholder: '结果数量，范围 1-100' },
+                    { name: 'freshness', type: 'select', required: false, options: ['', 'day', 'week', 'month', 'year'], description: '时效范围' }
+                ]
+            },
+            'list_domains': {
+                description: '列出可用垂直领域',
+                params: [
+                    { name: 'maid', type: 'text', required: true, placeholder: '你的名字' },
+                    { name: 'domain', type: 'text', required: false, placeholder: '单个垂直领域，如 finance、academic、security、code、tech、legal' },
+                    { name: 'domains', type: 'textarea', required: false, placeholder: '批量查询最多 5 个领域，支持字符串或数组；与 domain 二选一' }
+                ]
+            },
+            'batch_search': {
+                description: '批量搜索',
+                params: [
+                    { name: 'maid', type: 'text', required: true, placeholder: '你的名字' },
+                    { name: 'queries', type: 'textarea', required: true, placeholder: '1-5 个查询对象或字符串，支持 JSON 数组或逐行输入' },
+                    { name: 'domain', type: 'text', required: false, placeholder: '垂直领域，如 finance、academic、security、code、tech、legal' },
+                    { name: 'sub_domain', type: 'text', required: false, placeholder: '子领域路由，如 finance.us_stock、academic.doi、security.cve' },
+                    { name: 'sub_domain_params', type: 'textarea', required: false, placeholder: '子领域额外参数，支持 JSON 对象或字符串' },
+                    { name: 'content_types', type: 'text', required: false, placeholder: 'web、news、code、doc、academic、data、image、video、audio；支持单值或数组' },
+                    { name: 'zone', type: 'select', required: false, options: ['', 'cn', 'intl'], description: '地域约束；当 list_domains 标记 zone=CN 时必须传 cn' },
+                    { name: 'max_results', type: 'number', required: false, min: 1, max: 100, placeholder: '结果数量，范围 1-100' },
+                    { name: 'freshness', type: 'select', required: false, options: ['', 'day', 'week', 'month', 'year'], description: '时效范围' }
+                ]
+            },
+            'extract': {
+                description: '提取网页正文',
+                params: [
+                    { name: 'maid', type: 'text', required: true, placeholder: '你的名字' },
+                    { name: 'url', type: 'text', required: true, placeholder: '需要提取正文的网页 URL' }
+                ]
+            }
+        }
     },
     'GoogleSearch': {
         displayName: 'Google 搜索',
@@ -917,7 +989,8 @@ export const tools = {
         description: '设置一个闹钟。[前端分布式: VCPAlarm]',
         params: [
             { name: 'maid', type: 'text', required: true, placeholder: '你的名字' },
-            { name: 'time_description', type: 'text', required: true, placeholder: '1分钟后' }
+            { name: 'time_description', type: 'text', required: true, placeholder: '1分钟后' },
+            { name: 'reminder_text', type: 'textarea', required: false, placeholder: '提醒我检查烤箱里的点心' }
         ]
     },
 
