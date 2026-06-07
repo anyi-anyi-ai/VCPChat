@@ -93,10 +93,11 @@
         const resultDiv = document.getElementById('result');
         let recognition;
         let recognizing = false;
-        let manualStop = false; // Flag to prevent auto-restart on manual stop
-
-        // The 'window.sendTextToElectron' function will be injected directly by Puppeteer's exposeFunction.
-        // We don't need a setter for it anymore.
+        let manualStop = false;
+        let silenceTimer = null; // 1秒停顿计时器
+        
+        // 核心：分段式识别协议
+        let currentSessionText = '';
 
         if ('webkitSpeechRecognition' in window) {
             recognition = new webkitSpeechRecognition();
@@ -106,38 +107,49 @@
 
             recognition.onstart = function() {
                 recognizing = true;
-                manualStop = false; // Reset flag on start
+                manualStop = false;
                 startButton.textContent = '停止录音';
                 startButton.style.backgroundColor = '#dc3545';
                 statusDiv.textContent = '正在聆听...';
-                resultDiv.textContent = '';
             };
 
             recognition.onresult = function(event) {
-                let interimTranscript = '';
-                let finalTranscript = '';
+                let sessionFinal = '';
+                let sessionInterim = '';
 
-                for (let i = event.resultIndex; i < event.results.length; ++i) {
+                for (let i = 0; i < event.results.length; ++i) {
                     if (event.results[i].isFinal) {
-                        finalTranscript += event.results[i][0].transcript;
+                        sessionFinal += event.results[i][0].transcript;
                     } else {
-                        interimTranscript += event.results[i][0].transcript;
+                        sessionInterim += event.results[i][0].transcript;
                     }
                 }
-                const fullText = finalTranscript + interimTranscript;
-                resultDiv.innerHTML = finalTranscript + '<span style="color:#999;">' + interimTranscript + '</span>';
                 
-                // Send text back to Electron if the injected function exists
+                currentSessionText = sessionFinal + sessionInterim;
+                resultDiv.innerHTML = sessionFinal + '<span style="color:#999;">' + sessionInterim + '</span>';
+                
+                // 发送当前分段的实时文本
                 if (typeof window.sendTextToElectron === 'function') {
-                    window.sendTextToElectron(fullText);
+                    window.sendTextToElectron({
+                        text: currentSessionText,
+                        isFinal: false
+                    });
                 }
+
+                // --- 1秒停顿强行落锁逻辑 ---
+                clearTimeout(silenceTimer);
+                silenceTimer = setTimeout(() => {
+                    if (recognizing && currentSessionText.trim() !== '') {
+                        console.log('[SpeechRecognizer] 停顿超过1秒，强行结束当前分段以落锁');
+                        recognition.stop(); // 触发 onend 进行落锁
+                    }
+                }, 1000);
             };
 
             recognition.onerror = function(event) {
                 console.error('语音识别错误:', event.error);
                 statusDiv.textContent = '识别出错: ' + event.error;
                 
-                // Send error back to Electron for debugging
                 if (typeof window.sendErrorToElectron === 'function') {
                     window.sendErrorToElectron('Speech Recognition Error: ' + event.error);
                 }
@@ -151,25 +163,33 @@
                 recognizing = false;
                 startButton.textContent = '开始录音';
                 startButton.style.backgroundColor = '#4682b4';
-                statusDiv.textContent = '录音结束。';
-                // If recognition stops and it wasn't a manual stop, restart it.
-                // This handles cases where the service stops due to silence or other issues.
+                statusDiv.textContent = '分段结束。';
+
+                // 提交当前分段：发送最后一次确定的文本并标记 isFinal
+                if (typeof window.sendTextToElectron === 'function') {
+                    window.sendTextToElectron({
+                        text: currentSessionText,
+                        isFinal: true
+                    });
+                }
+                currentSessionText = '';
+
                 if (!manualStop) {
-                    console.log('Recognition ended, restarting automatically...');
-                    // Use a small timeout to prevent rapid-fire restarts on some errors
+                    console.log('[SpeechRecognizer] 检测到停顿，分段提交并自动准备下一段...');
                     setTimeout(() => {
-                        // Check again in case the user manually started during the timeout
-                        if (!recognizing) {
-                           window.startRecognition();
+                        if (!recognizing && !manualStop) {
+                           recognition.start();
                         }
-                    }, 500);
+                    }, 100); // 快速重启以保持连贯感
                 }
             };
 
-            // Allow Puppeteer to control start/stop directly
+            // 外部手动触发
             window.startRecognition = () => {
                 if (!recognizing) {
-                    manualStop = false; // Ensure we intend to run
+                    manualStop = false;
+                    currentSessionText = '';
+                    resultDiv.textContent = '';
                     recognition.start();
                 }
             };

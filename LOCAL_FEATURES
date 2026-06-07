@@ -1,0 +1,324 @@
+# VCPChat 本地功能保留清单：语音输入功能
+
+生成时间：2026-06-06 15:03:46（Asia/Shanghai）
+
+## 1. 目的
+
+本文档用于标记当前 `VCPChat` 中存在的“本地增强功能”，避免以后拉取上游前端代码、覆盖前端文件、执行更新包或合并新版本时，把该功能误删。
+
+本地增强功能名称：
+
+- VCPChat 主聊天窗口语音输入功能
+
+功能来源：
+
+- `VCPChat/VoiceInput_Pack`
+
+合并方式：
+
+- 非整包覆盖。
+- 已从 `VoiceInput_Pack` 中抽取语音输入相关逻辑，合并到当前源文件。
+- 当前项目源文件的新功能已保留。
+
+详细合并报告：
+
+- `VCPChat/VoiceInput_Merge_Report_20260606.md`
+
+## 2. 更新上游前端前必须检查
+
+以后更新 `VCPChat` 前端、拉取上游、覆盖前端文件、重装前端包、执行自动更新脚本时，必须先检查以下文件是否会被替换：
+
+- `VCPChat/main.html`
+- `VCPChat/renderer.js`
+- `VCPChat/modules/event-listeners.js`
+- `VCPChat/modules/chatManager.js`
+- `VCPChat/Groupmodules/grouprenderer.js`
+- `VCPChat/styles/components.css`
+- `VCPChat/modules/ipc/voiceHandlers.js`
+- `VCPChat/Voicechatmodules/recognizer.html`
+- `VCPChat/Voicechatmodules/voicechat.js`
+
+如果上游更新修改了这些文件，应当执行“三方合并”，不要直接覆盖。
+
+三方来源建议：
+
+1. 当前本地文件。
+2. 上游新文件。
+3. 本地语音功能合并报告中的功能锚点。
+
+## 3. 必须保留的功能锚点
+
+### 3.1 页面按钮锚点
+
+文件：`VCPChat/main.html`
+
+必须保留：
+
+```html
+<button id="voiceInputBtn" title="语音输入" disabled>
+```
+
+用途：
+
+- 主聊天输入区的麦克风按钮。
+
+检查点：
+
+- `#voiceInputBtn` 应位于聊天输入操作按钮区域。
+- 默认应为 `disabled`，由聊天状态控制启用。
+
+### 3.2 渲染层 DOM 引用锚点
+
+文件：`VCPChat/renderer.js`
+
+必须保留：
+
+```js
+const voiceInputBtn = document.getElementById('voiceInputBtn');
+```
+
+并且必须传入：
+
+```js
+voiceInputBtn: voiceInputBtn
+```
+
+以及：
+
+```js
+setupEventListeners({
+    chatMessagesDiv, voiceInputBtn, sendMessageBtn, messageInput, attachFileBtn, globalSettingsBtn,
+```
+
+用途：
+
+- 让聊天管理模块和事件监听模块可以控制语音按钮。
+
+### 3.3 事件监听与语音写入锚点
+
+文件：`VCPChat/modules/event-listeners.js`
+
+必须保留：
+
+```js
+chatAPI.onSpeechRecognitionResult((data) => {
+```
+
+必须保留按钮点击逻辑：
+
+```js
+voiceInputBtn.addEventListener('click', async () => {
+```
+
+必须保留开始识别：
+
+```js
+chatAPI.startSpeechRecognition();
+```
+
+必须保留停止识别：
+
+```js
+chatAPI.stopSpeechRecognition();
+```
+
+必须保留的功能能力：
+
+- 识别文本写入输入框。
+- 支持 `{ text, isFinal }` 对象格式。
+- 兼容旧字符串格式。
+- 1 秒停顿逻辑落锁。
+- 光标位置插入。
+- 用户手动点击/输入时保护光标。
+
+### 3.4 聊天状态控制锚点
+
+文件：`VCPChat/modules/chatManager.js`
+
+必须保留：
+
+```js
+voiceInputBtn.disabled = true;
+```
+
+以及：
+
+```js
+voiceInputBtn.disabled = false;
+```
+
+用途：
+
+- 未选择 Agent/群组时禁用麦克风按钮。
+- 进入可聊天状态后启用麦克风按钮。
+
+### 3.5 群组清理状态锚点
+
+文件：`VCPChat/Groupmodules/grouprenderer.js`
+
+必须保留：
+
+```js
+mainRendererElements.voiceInputBtn.disabled = true;
+```
+
+用途：
+
+- 删除群组或清空当前会话状态时，同步禁用语音按钮。
+
+### 3.6 样式锚点
+
+文件：`VCPChat/styles/components.css`
+
+必须保留：
+
+```css
+#voiceInputBtn
+```
+
+必须保留录音状态：
+
+```css
+#voiceInputBtn.recording
+```
+
+必须保留动画：
+
+```css
+@keyframes voice-input-pulse
+```
+
+用途：
+
+- 保持语音按钮与现有输入区按钮样式一致。
+- 录音时显示红色呼吸状态。
+
+### 3.7 IPC 回传锚点
+
+文件：`VCPChat/modules/ipc/voiceHandlers.js`
+
+必须保留：
+
+```js
+const targetWindow = voiceChatWindow || (mainWindow && mainWindow.webContents === event.sender ? mainWindow : null);
+```
+
+必须保留：
+
+```js
+targetWindow.webContents.send('speech-recognition-result', text);
+```
+
+用途：
+
+- 让主聊天窗口也可以接收语音识别结果。
+- 原始逻辑只支持语音聊天子窗口，主窗口请求会被忽略。
+
+### 3.8 识别引擎锚点
+
+文件：`VCPChat/Voicechatmodules/recognizer.html`
+
+必须保留：
+
+```js
+window.sendTextToElectron({
+    text: currentSessionText,
+    isFinal: false
+});
+```
+
+以及最终提交：
+
+```js
+window.sendTextToElectron({
+    text: currentSessionText,
+    isFinal: true
+});
+```
+
+用途：
+
+- 分段流式语音识别协议。
+- 支持实时文本与最终落锁标记。
+
+### 3.9 语音聊天窗口兼容锚点
+
+文件：`VCPChat/Voicechatmodules/voicechat.js`
+
+必须保留：
+
+```js
+const text = (payload && typeof payload === 'object') ? (payload.text || '') : payload;
+```
+
+用途：
+
+- 避免新版识别引擎返回对象时，语音聊天窗口显示 `[object Object]`。
+
+## 4. 推荐的代码注释标记
+
+以后如果要继续增强可维护性，建议在上述关键代码段附近加入统一注释标记：
+
+```js
+// [LOCAL-FEATURE:VOICE_INPUT] 主聊天窗口语音输入功能，请勿在上游更新时直接覆盖。
+```
+
+HTML 中可使用：
+
+```html
+<!-- [LOCAL-FEATURE:VOICE_INPUT] 主聊天窗口语音输入按钮，请勿在上游更新时直接覆盖。 -->
+```
+
+CSS 中可使用：
+
+```css
+/* [LOCAL-FEATURE:VOICE_INPUT] 主聊天窗口语音输入按钮样式，请勿在上游更新时直接覆盖。 */
+```
+
+建议在以下位置添加该标记：
+
+- `VCPChat/main.html` 中 `#voiceInputBtn` 前。
+- `VCPChat/renderer.js` 中 `voiceInputBtn` DOM 获取处。
+- `VCPChat/modules/event-listeners.js` 中 `Voice Input Logic` 代码块前。
+- `VCPChat/modules/chatManager.js` 中控制 `voiceInputBtn.disabled` 的位置。
+- `VCPChat/Groupmodules/grouprenderer.js` 中禁用语音按钮的位置。
+- `VCPChat/styles/components.css` 中 `#voiceInputBtn` 相关样式前。
+- `VCPChat/modules/ipc/voiceHandlers.js` 中 `targetWindow` 逻辑处。
+- `VCPChat/Voicechatmodules/recognizer.html` 中 `sendTextToElectron` 对象协议处。
+- `VCPChat/Voicechatmodules/voicechat.js` 中对象格式兼容处。
+
+## 5. 上游更新后的复查命令
+
+更新上游后，建议使用以下命令检查语音锚点是否还在：
+
+```cmd
+findstr /S /N /I "voiceInputBtn onSpeechRecognitionResult startSpeechRecognition stopSpeechRecognition sendTextToElectron LOCAL-FEATURE:VOICE_INPUT" VCPChat\*.html VCPChat\*.js VCPChat\*.css
+```
+
+也可以执行语法检查：
+
+```cmd
+node --check VCPChat/modules/event-listeners.js && node --check VCPChat/renderer.js && node --check VCPChat/modules/chatManager.js && node --check VCPChat/Groupmodules/grouprenderer.js && node --check VCPChat/modules/ipc/voiceHandlers.js && node --check VCPChat/Voicechatmodules/voicechat.js
+```
+
+## 6. 更新上游时的推荐流程
+
+1. 更新前先备份当前 `VCPChat`。
+2. 拉取或覆盖上游代码前，查看上游是否修改第 2 节列出的文件。
+3. 如果没有修改这些文件，正常更新即可。
+4. 如果修改了这些文件，不要直接覆盖；使用对比工具合并。
+5. 合并后检查第 3 节所有功能锚点。
+6. 执行第 5 节的查验命令。
+7. 启动 `VCPChat`，实际测试麦克风按钮是否存在、能否启用、能否输入文字。
+
+## 7. 结论
+
+该语音输入功能属于本地增强功能，不应在后续上游前端更新中被无提示覆盖。
+
+后续维护时，只要看到以下标记或本文档，就应当保留并重新合并相关逻辑：
+
+```text
+[LOCAL-FEATURE:VOICE_INPUT]
+```
+
+本文件应长期保留在 `VCPChat` 目录下，作为本地增强功能索引。后续如果增加更多本地功能，也可继续补充到类似的保留清单中。

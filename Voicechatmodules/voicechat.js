@@ -660,7 +660,8 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // --- Speech Recognition IPC Listener ---
-    window.electronAPI.onSpeechRecognitionResult((text) => {
+    window.electronAPI.onSpeechRecognitionResult((payload) => {
+        const text = (payload && typeof payload === 'object') ? (payload.text || '') : payload;
         messageInput.value = text;
 
         // Reset the timeout every time new text is received

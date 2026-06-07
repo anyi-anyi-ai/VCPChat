@@ -61,11 +61,7 @@ function handleOpenVoiceChatWindow(event, { agentId } = {}) {
 
 async function handleStartSpeechRecognition(event) {
     const voiceChatWindow = openChildWindows.find(win => win.webContents === event.sender);
-    const targetWindow = voiceChatWindow || (mainWindow && mainWindow.webContents === event.sender ? mainWindow : null);
-    if (!targetWindow) {
-        console.error('[VoiceHandlers] Received start-speech-recognition from unknown sender.');
-        return;
-    }
+    if (!voiceChatWindow) return;
 
     let speechConfig = {};
     try {
@@ -80,8 +76,8 @@ async function handleStartSpeechRecognition(event) {
 
     const speechRecognizer = require('../speechRecognizer');
     speechRecognizer.start((text) => {
-        if (targetWindow && !targetWindow.isDestroyed()) {
-            targetWindow.webContents.send('speech-recognition-result', text);
+        if (voiceChatWindow && !voiceChatWindow.isDestroyed()) {
+            voiceChatWindow.webContents.send('speech-recognition-result', text);
         }
     }, speechConfig);
 }

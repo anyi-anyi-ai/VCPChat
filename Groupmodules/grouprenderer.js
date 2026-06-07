@@ -929,6 +929,7 @@ window.GroupRenderer = (() => {
                         if (mainRendererElements && mainRendererElements.messageInput) mainRendererElements.messageInput.disabled = true;
                         if (mainRendererElements && mainRendererElements.sendMessageBtn) mainRendererElements.sendMessageBtn.disabled = true;
                         if (mainRendererElements && mainRendererElements.attachFileBtn) mainRendererElements.attachFileBtn.disabled = true;
+                        if (mainRendererElements && mainRendererElements.voiceInputBtn) mainRendererElements.voiceInputBtn.disabled = true;
                         if (messageRenderer) {
                             messageRenderer.setCurrentItemAvatar(null);
                             messageRenderer.setCurrentItemAvatarColor(null);

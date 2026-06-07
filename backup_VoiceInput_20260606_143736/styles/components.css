@@ -409,7 +409,7 @@ body.light-theme .chat-actions .header-button:hover {
     color: #ffffff;
 }
 
-#sendMessageBtn, #attachFileBtn, #voiceInputBtn, #quickNewTopicBtn, #emoticonTriggerBtn {
+#sendMessageBtn, #attachFileBtn, #quickNewTopicBtn, #emoticonTriggerBtn {
     border: none;
     display: flex;
     justify-content: center;
@@ -434,13 +434,13 @@ body:not(.light-theme) #sendMessageBtn svg {
     color: rgba(255, 255, 255, 0.92);
 }
 
-#attachFileBtn svg, #voiceInputBtn svg, #quickNewTopicBtn svg, #emoticonTriggerBtn svg {
+#attachFileBtn svg, #quickNewTopicBtn svg, #emoticonTriggerBtn svg {
     width: 16px;
     height: 16px;
     fill: none;
 }
 
-body.light-theme #sendMessageBtn svg, body.light-theme #attachFileBtn svg, body.light-theme #voiceInputBtn svg, body.light-theme #quickNewTopicBtn svg, body.light-theme #emoticonTriggerBtn svg {
+body.light-theme #sendMessageBtn svg, body.light-theme #attachFileBtn svg, body.light-theme #quickNewTopicBtn svg, body.light-theme #emoticonTriggerBtn svg {
     stroke: #ffffff; 
 }
 
@@ -448,11 +448,11 @@ body.light-theme #sendMessageBtn svg {
     fill: none;
 }
 
-body.light-theme #attachFileBtn svg, body.light-theme #voiceInputBtn svg, body.light-theme #quickNewTopicBtn svg, body.light-theme #emoticonTriggerBtn svg {
+body.light-theme #attachFileBtn svg, body.light-theme #quickNewTopicBtn svg, body.light-theme #emoticonTriggerBtn svg {
     fill: none; 
 }
 
-body.light-theme #attachFileBtn svg, body.light-theme #voiceInputBtn svg, body.light-theme #quickNewTopicBtn svg, body.light-theme #emoticonTriggerBtn svg {
+body.light-theme #attachFileBtn svg, body.light-theme #quickNewTopicBtn svg, body.light-theme #emoticonTriggerBtn svg {
     stroke: var(--button-bg);
     fill: none;
 }
@@ -492,7 +492,7 @@ body.light-theme #attachFileBtn svg, body.light-theme #voiceInputBtn svg, body.l
     transform: translateY(-1px);
 }
 
-#attachFileBtn, #voiceInputBtn, #quickNewTopicBtn, #emoticonTriggerBtn {
+#attachFileBtn, #quickNewTopicBtn, #emoticonTriggerBtn {
     width: 32px;
     height: 32px;
     border-radius: 50%;
@@ -502,41 +502,22 @@ body.light-theme #attachFileBtn svg, body.light-theme #voiceInputBtn svg, body.l
     flex-shrink: 0;
 }
 
-#quickNewTopicBtn, #attachFileBtn, #voiceInputBtn {
+#quickNewTopicBtn, #attachFileBtn {
     margin-right: 4px;
 }
 
-#attachFileBtn:hover:not(:disabled), #voiceInputBtn:hover:not(:disabled), #quickNewTopicBtn:hover:not(:disabled), #emoticonTriggerBtn:hover:not(:disabled) {
+#attachFileBtn:hover:not(:disabled), #quickNewTopicBtn:hover:not(:disabled), #emoticonTriggerBtn:hover:not(:disabled) {
     background-color: rgba(128, 128, 128, 0.12);
 }
 
 #sendMessageBtn:disabled,
 #attachFileBtn:disabled,
-#voiceInputBtn:disabled,
 #quickNewTopicBtn:disabled,
 #emoticonTriggerBtn:disabled {
     opacity: 0.55;
     cursor: not-allowed;
     transform: none;
     box-shadow: none;
-}
-
-
-#voiceInputBtn.recording {
-    background-color: var(--danger-color, #dc3545);
-    color: #ffffff;
-    box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.7);
-    animation: voice-input-pulse 1.4s infinite;
-}
-
-#voiceInputBtn.recording svg {
-    stroke: #ffffff;
-}
-
-@keyframes voice-input-pulse {
-    0% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.65); }
-    70% { box-shadow: 0 0 0 8px rgba(220, 53, 69, 0); }
-    100% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0); }
 }
 
 /* --- Modals --- */

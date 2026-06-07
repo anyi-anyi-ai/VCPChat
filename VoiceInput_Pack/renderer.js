@@ -1,4 +1,4 @@
-// --- Globals ---
+// --- Globals --- 
 let globalSettings = {
     sidebarWidth: 260,
     enableMiddleClickQuickAction: false,
@@ -12,36 +12,6 @@ let globalSettings = {
     filterRules: [], // 过滤规则列表
     enableRegenerateConfirmation: true, // 重新回复确认机制开关
     flowlockContinueDelay: 5, // 心流锁续写延迟（秒）
-    enableThoughtChainInjection: false, // 元思考注入上下文开关
-    fileKey: '',
-    enableWideChatLayout: false,
-    chatBubbleMaxWidthDefault: 82,
-    chatBubbleMaxWidthNotifications: 90,
-    chatBubbleMaxWidthNarrow: 85,
-    chatBubbleMaxWidthWideDefault: 92,
-    chatBubbleMaxWidthWideNotifications: 96,
-    chatBubbleMaxWidthWideNarrow: 92,
-    chatFontPreset: 'system',
-    chatFontCustom: '',
-    chatCodeFontPreset: 'consolas',
-    chatCodeFontCustom: '',
-    chatDiaryFontPreset: 'serif',
-    chatDiaryFontCustom: '',
-    chatToolFontPreset: 'system',
-    chatToolFontCustom: '',
-    enableUserChatBubbleUi: true,
-    showUserMetaInChatBubbleUi: true,
-    voiceMode: 'local',
-    speechRecognizerBrowserPath: '',
-    speechRecognizerPagePath: 'Voicechatmodules/recognizer.html',
-    voiceLocalSettings: {
-        sovitsUrl: '',
-        sovitsKey: ''
-    },
-    voiceNetworkSettings: {
-        providerUrl: 'https://api.siliconflow.cn',
-        providerKey: ''
-    }
 };
 // Unified selected item state
 let currentSelectedItem = {
@@ -53,9 +23,6 @@ let currentSelectedItem = {
 };
 let currentTopicId = null;
 let currentChatHistory = [];
-window.__vcpRendererReady = false;
-window.__vcpPendingTopicSelection = null;
-const chatAPI = window.chatAPI || window.electronAPI;
 
 // 暴露到window对象以便其他模块访问
 window.currentSelectedItem = currentSelectedItem;
@@ -73,19 +40,16 @@ const itemListUl = document.getElementById('agentList'); // Renamed from agentLi
 const currentChatNameH3 = document.getElementById('currentChatAgentName'); // Will show Agent or Group name
 const chatMessagesDiv = document.getElementById('chatMessages');
 const messageInput = document.getElementById('messageInput');
+const voiceInputBtn = document.getElementById('voiceInputBtn');
 const sendMessageBtn = document.getElementById('sendMessageBtn');
 const attachFileBtn = document.getElementById('attachFileBtn');
-const voiceInputBtn = document.getElementById('voiceInputBtn');
-const emoticonTriggerBtn = document.getElementById('emoticonTriggerBtn');
-const quickNewTopicBtn = document.getElementById('quickNewTopicBtn');
 const attachmentPreviewArea = document.getElementById('attachmentPreviewArea');
-const chatInputCard = document.querySelector('.chat-input-card');
 
 const globalSettingsBtn = document.getElementById('globalSettingsBtn');
-// 模态框及其内部元素现在延迟加载，不再在顶层缓存引用
-let globalSettingsForm = null;
-let userAvatarInput = null;
-let userAvatarPreview = null;
+const globalSettingsModal = document.getElementById('globalSettingsModal');
+const globalSettingsForm = document.getElementById('globalSettingsForm');
+const userAvatarInput = document.getElementById('userAvatarInput');
+const userAvatarPreview = document.getElementById('userAvatarPreview');
 
 const createNewAgentBtn = document.getElementById('createNewAgentBtn'); // Text will change
 const createNewGroupBtn = document.getElementById('createNewGroupBtn'); // New button
@@ -131,130 +95,6 @@ const tabContentTopics = document.getElementById('tabContentTopics');
 const tabContentSettings = document.getElementById('tabContentSettings');
 
 const topicSearchInput = document.getElementById('topicSearchInput'); // Should be in tabContentTopics
-const DEFAULT_SEND_BUTTON_HTML = sendMessageBtn?.innerHTML || '';
-const INTERRUPT_SEND_BUTTON_HTML = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"
-        fill="none" stroke="none" aria-hidden="true">
-        <rect x="4" y="4" width="16" height="16" rx="3" fill="currentColor"></rect>
-    </svg>
-`;
-
-function isContextForCurrentChat(context) {
-    if (!context || !currentSelectedItem?.id || !currentTopicId) return false;
-    const contextItemId = context.groupId || context.agentId;
-    return contextItemId === currentSelectedItem.id && context.topicId === currentTopicId;
-}
-
-function getInterruptibleMessageForCurrentChat() {
-    if (Array.isArray(currentChatHistory) && currentChatHistory.length > 0) {
-        for (let i = currentChatHistory.length - 1; i >= 0; i--) {
-            const message = currentChatHistory[i];
-            if (!message || message.role !== 'assistant') continue;
-
-            const messageItem = chatMessagesDiv?.querySelector(`.message-item[data-message-id="${message.id}"]`);
-            const isStreaming = Boolean(messageItem?.classList.contains('streaming'));
-            if (message.isThinking === true || isStreaming) {
-                return { ...message, isStreaming };
-            }
-        }
-    }
-
-    const activeStreamingMessageId = window.streamManager?.getActiveStreamingMessageId?.();
-    const activeStreamingContext = window.streamManager?.getActiveStreamingContext?.();
-    if (!activeStreamingMessageId || !isContextForCurrentChat(activeStreamingContext)) {
-        return null;
-    }
-
-    const activeStreamingMessage = currentChatHistory.find(
-        (message) => message?.id === activeStreamingMessageId && message.role === 'assistant'
-    );
-    if (activeStreamingMessage) {
-        return { ...activeStreamingMessage, isStreaming: true };
-    }
-
-    return {
-        id: activeStreamingMessageId,
-        role: 'assistant',
-        name: activeStreamingContext.agentName || currentSelectedItem?.name || currentSelectedItem?.id,
-        agentId: activeStreamingContext.agentId,
-        groupId: activeStreamingContext.groupId,
-        isGroupMessage: activeStreamingContext.isGroupMessage === true,
-        avatarUrl: activeStreamingContext.avatarUrl || currentSelectedItem?.avatarUrl,
-        avatarColor: activeStreamingContext.avatarColor || currentSelectedItem?.config?.avatarCalculatedColor,
-        isStreaming: true
-    };
-}
-
-function updateSendButtonState() {
-    if (!sendMessageBtn) return;
-
-    const nextMode = getInterruptibleMessageForCurrentChat() ? 'interrupt' : 'send';
-    sendMessageBtn.dataset.mode = nextMode;
-    sendMessageBtn.classList.toggle('interrupt-mode', nextMode === 'interrupt');
-    sendMessageBtn.innerHTML = nextMode === 'interrupt' ? INTERRUPT_SEND_BUTTON_HTML : DEFAULT_SEND_BUTTON_HTML;
-    sendMessageBtn.title = nextMode === 'interrupt' ? '中止回复' : '发送消息/右键高级回复';
-}
-
-async function interruptActiveResponseFromSendButton() {
-    const activeMessage = getInterruptibleMessageForCurrentChat();
-    if (!activeMessage) return false;
-
-    const isGroupMessage = activeMessage.isGroupMessage === true || currentSelectedItem?.type === 'group';
-    const messageContext = {
-        agentId: activeMessage.agentId || (isGroupMessage ? null : currentSelectedItem?.id),
-        groupId: activeMessage.groupId || (isGroupMessage ? currentSelectedItem?.id : null),
-        topicId: currentTopicId,
-        isGroupMessage,
-        agentName: activeMessage.name || currentSelectedItem?.name || currentSelectedItem?.id,
-        avatarUrl: activeMessage.avatarUrl || currentSelectedItem?.avatarUrl,
-        avatarColor: activeMessage.avatarColor || currentSelectedItem?.config?.avatarCalculatedColor
-    };
-
-    let result = { success: false, error: '无法发送中止请求。' };
-    if (isGroupMessage) {
-        if (chatAPI && typeof chatAPI.interruptGroupRequest === 'function') {
-            result = await chatAPI.interruptGroupRequest(activeMessage.id);
-        } else {
-            result = { success: false, error: '群聊中止接口不可用。' };
-        }
-    } else if (interruptHandler && typeof interruptHandler.interrupt === 'function') {
-        result = await interruptHandler.interrupt(activeMessage.id);
-    }
-
-    if (window.messageRenderer && typeof window.messageRenderer.finalizeStreamedMessage === 'function') {
-        await window.messageRenderer.finalizeStreamedMessage(
-            activeMessage.id,
-            'cancelled_by_user',
-            messageContext,
-            { error: '用户已中止回复。' }
-        );
-    }
-
-    updateSendButtonState();
-
-    if (result.success) {
-        uiHelperFunctions?.showToastNotification?.('已发送中止信号。', 'success');
-        return true;
-    }
-
-    uiHelperFunctions?.showToastNotification?.(`中止失败：${result.error || '未知错误'}`, 'error');
-    return true;
-}
-
-async function handleSendButtonAction() {
-    if (getInterruptibleMessageForCurrentChat()) {
-        await interruptActiveResponseFromSendButton();
-        return;
-    }
-
-    if (window.chatManager && typeof window.chatManager.handleSendMessage === 'function') {
-        await window.chatManager.handleSendMessage();
-    }
-}
-
-window.updateSendButtonState = updateSendButtonState;
-window.handleSendButtonAction = handleSendButtonAction;
-updateSendButtonState();
 
 const leftSidebar = document.querySelector('.sidebar');
 const rightNotificationsSidebar = document.getElementById('notificationsSidebar');
@@ -278,16 +118,15 @@ let inviteAgentButtonsContainerElement; // 新增：邀请发言按钮容器的�
 
 // Assistant settings elements
 const toggleAssistantBtn = document.getElementById('toggleAssistantBtn'); // New button
-// 模态框内部元素延迟加载
-let assistantAgentContainer = null;
-let assistantAgentSelect = null;
+const assistantAgentContainer = document.getElementById('assistantAgentContainer');
+const assistantAgentSelect = document.getElementById('assistantAgent');
 
 // Model selection elements
 const openModelSelectBtn = document.getElementById('openModelSelectBtn');
-let modelSelectModal = null;
-let modelList = null;
-let modelSearchInput = null;
-let refreshModelsBtn = null;
+const modelSelectModal = document.getElementById('modelSelectModal');
+const modelList = document.getElementById('modelList');
+const modelSearchInput = document.getElementById('modelSearchInput');
+const refreshModelsBtn = document.getElementById('refreshModelsBtn');
 
 // UI Helper functions to be passed to modules
 // The main uiHelperFunctions object is now defined in modules/ui-helpers.js
@@ -313,13 +152,6 @@ import { setupEventListeners } from './modules/event-listeners.js';
         console.error('[RENDERER_INIT] emoticonManager module not found!');
     }
 
-    // Initialize App Tray Manager
-    if (window.trayManager) {
-        window.trayManager.init();
-    } else {
-        console.error('[RENDERER_INIT] trayManager module not found!');
-    }
-
     // 确保在GroupRenderer初始化之前，其容器已准备好
     uiHelperFunctions.prepareGroupSettingsDOM();
     inviteAgentButtonsContainerElement = document.getElementById('inviteAgentButtonsContainer'); // 新增：获取容器引用
@@ -330,7 +162,7 @@ import { setupEventListeners } from './modules/event-listeners.js';
             elements: {
                 itemListUl: itemListUl,
             },
-            electronAPI: chatAPI,
+            electronAPI: window.electronAPI,
             refs: {
                 currentSelectedItemRef: { get: () => currentSelectedItem },
             },
@@ -355,6 +187,7 @@ import { setupEventListeners } from './modules/event-listeners.js';
         const mainRendererElementsForGroupRenderer = {
             topicListUl: document.getElementById('topicList'),
             messageInput: messageInput,
+            voiceInputBtn: voiceInputBtn,
             sendMessageBtn: sendMessageBtn,
             attachFileBtn: attachFileBtn,
             currentChatNameH3: currentChatNameH3,
@@ -370,7 +203,7 @@ import { setupEventListeners } from './modules/event-listeners.js';
         console.log('[Renderer PRE-INIT GroupRenderer] selectItemPromptForSettings within that object:', mainRendererElementsForGroupRenderer.selectItemPromptForSettings);
 
         window.GroupRenderer.init({
-            electronAPI: chatAPI,
+            electronAPI: window.electronAPI,
             globalSettingsRef: { get: () => globalSettings, set: (newSettings) => globalSettings = newSettings },
             currentSelectedItemRef: {
                 get: () => currentSelectedItem,
@@ -426,7 +259,7 @@ import { setupEventListeners } from './modules/event-listeners.js';
 
     // Initialize other modules after GroupRenderer, in case they depend on its setup
     if (window.messageRenderer) {
-        interruptHandler.initialize(chatAPI);
+        interruptHandler.initialize(window.electronAPI);
 
         window.messageRenderer.initializeMessageRenderer({
             currentChatHistoryRef: { get: () => currentChatHistory, set: (val) => currentChatHistory = val },
@@ -446,7 +279,7 @@ import { setupEventListeners } from './modules/event-listeners.js';
             },
             globalSettingsRef: { get: () => globalSettings, set: (newSettings) => globalSettings = newSettings },
             chatMessagesDiv: chatMessagesDiv,
-            electronAPI: chatAPI,
+            electronAPI: window.electronAPI,
             markedInstance: markedInstance, // Assuming marked.js is loaded
             uiHelper: uiHelperFunctions,
             interruptHandler: interruptHandler, // Pass the handler
@@ -480,8 +313,7 @@ import { setupEventListeners } from './modules/event-listeners.js';
     if (window.inputEnhancer) {
         window.inputEnhancer.initializeInputEnhancer({
             messageInput: messageInput,
-            dropTargetElement: chatInputCard,
-            electronAPI: chatAPI,
+            electronAPI: window.electronAPI,
             attachedFiles: { get: () => attachedFiles, set: (val) => attachedFiles = val },
             updateAttachmentPreview: () => uiHelperFunctions.updateAttachmentPreview(attachedFiles, attachmentPreviewArea),
             getCurrentAgentId: () => currentSelectedItem.id, // Corrected: pass a function that returns the ID
@@ -493,12 +325,12 @@ import { setupEventListeners } from './modules/event-listeners.js';
     }
 
 
-    chatAPI.onVCPLogStatus((statusUpdate) => {
+    window.electronAPI.onVCPLogStatus((statusUpdate) => {
         if (window.notificationRenderer) {
             window.notificationRenderer.updateVCPLogStatus(statusUpdate, vcpLogConnectionStatusDiv);
         }
     });
-    chatAPI.onVCPLogMessage((logData) => {
+    window.electronAPI.onVCPLogMessage((logData) => {
         if (window.notificationRenderer) {
             const computedStyle = getComputedStyle(document.body);
             const themeColors = {
@@ -515,7 +347,7 @@ import { setupEventListeners } from './modules/event-listeners.js';
     });
 
     // Unified listener for all VCP stream events (agent and group)
-    chatAPI.onVCPStreamEvent(async (eventData) => {
+    window.electronAPI.onVCPStreamEvent(async (eventData) => {
         if (!window.messageRenderer) {
             console.error("onVCPStreamEvent: messageRenderer not available.");
             return;
@@ -540,7 +372,7 @@ import { setupEventListeners } from './modules/event-listeners.js';
             (context.groupId ? context.groupId === currentSelectedItem.id : context.agentId === currentSelectedItem.id) &&
             context.topicId === currentTopicId;
 
-        // console.log(`[onVCPStreamEvent] Received event type '${type}' for msg ${messageId}. Relevant to current view: ${isRelevantToCurrentView}`, context);
+        console.log(`[onVCPStreamEvent] Received event type '${type}' for msg ${messageId}. Relevant to current view: ${isRelevantToCurrentView}`, context);
 
         // Data model updates should ALWAYS happen, regardless of the current view.
         // UI updates (creating new DOM elements) should only happen if the view is relevant.
@@ -550,12 +382,7 @@ import { setupEventListeners } from './modules/event-listeners.js';
                 break;
 
             case 'end':
-                window.messageRenderer.finalizeStreamedMessage(
-                    messageId,
-                    finish_reason || 'completed',
-                    context,
-                    { fullResponse, error }
-                );
+                window.messageRenderer.finalizeStreamedMessage(messageId, finish_reason || 'completed', context);
                 if (context && !context.isGroupMessage) {
                     // This can run in the background
                     await window.chatManager.attemptTopicSummarizationIfNeeded();
@@ -638,20 +465,7 @@ import { setupEventListeners } from './modules/event-listeners.js';
 
             case 'error':
                 console.error('VCP Stream Error on ID', messageId, ':', error, 'Context:', context);
-                
-                // --- Recovery Logic: Use accumulated text from main if fullResponse is missing ---
-                let finalContent = fullResponse || eventData.accumulatedResponse || "";
-                if (finalContent && finalContent.trim() !== "") {
-                    // Add a visual indicator that the stream was cut short
-                    finalContent += "\n\n> [!WARNING]\n> **流式响应中断**: " + (error || "未知连接错误") + "。已保存已接收的部分内容。";
-                }
-
-                window.messageRenderer.finalizeStreamedMessage(
-                    messageId,
-                    'error',
-                    context,
-                    { fullResponse: finalContent, error }
-                );
+                window.messageRenderer.finalizeStreamedMessage(messageId, 'error', context);
                 
                 // --- Flowlock: 处理错误情况，重置状态并可能触发下一次续写 ---
                 if (window.flowlockManager) {
@@ -854,7 +668,7 @@ import { setupEventListeners } from './modules/event-listeners.js';
     });
 
     // Listener for group topic title updates
-    chatAPI.onVCPGroupTopicUpdated(async (eventData) => {
+    window.electronAPI.onVCPGroupTopicUpdated(async (eventData) => {
         const { groupId, topicId, newTitle, topics } = eventData;
         console.log(`[Renderer] Received topic update for group ${groupId}, topic ${topicId}: "${newTitle}"`);
         if (currentSelectedItem.id === groupId && currentSelectedItem.type === 'group') {
@@ -891,7 +705,7 @@ import { setupEventListeners } from './modules/event-listeners.js';
             elements: {
                 topicListContainer: tabContentTopics,
             },
-            electronAPI: chatAPI,
+            electronAPI: window.electronAPI,
             refs: {
                 currentSelectedItemRef: {
                     get: () => currentSelectedItem
@@ -932,7 +746,7 @@ import { setupEventListeners } from './modules/event-listeners.js';
     // Initialize ChatManager
     if (window.chatManager) {
         window.chatManager.init({
-            electronAPI: chatAPI,
+            electronAPI: window.electronAPI,
             uiHelper: uiHelperFunctions,
             modules: {
                 messageRenderer: window.messageRenderer,
@@ -965,9 +779,9 @@ import { setupEventListeners } from './modules/event-listeners.js';
                 currentItemActionBtn: currentItemActionBtn,
                 clearCurrentChatBtn: clearCurrentChatBtn,
                 messageInput: messageInput,
+                voiceInputBtn: voiceInputBtn,
                 sendMessageBtn: sendMessageBtn,
                 attachFileBtn: attachFileBtn,
-                voiceInputBtn: voiceInputBtn,
             },
             mainRendererFunctions: {
                 displaySettingsForItem: () => window.settingsManager.displaySettingsForItem(),
@@ -983,7 +797,7 @@ import { setupEventListeners } from './modules/event-listeners.js';
     // Initialize Settings Manager
     if (window.settingsManager) {
         window.settingsManager.init({
-            electronAPI: chatAPI,
+            electronAPI: window.electronAPI,
             uiHelper: uiHelperFunctions,
             refs: {
                 currentSelectedItemRef: {
@@ -1043,11 +857,6 @@ import { setupEventListeners } from './modules/event-listeners.js';
                 }
             }
         });
-
-        // Pre-warm PromptManager to avoid first-click delay (Singleton Pattern)
-        if (window.settingsManager.prewarmPromptManager) {
-            window.settingsManager.prewarmPromptManager();
-        }
     } else {
         console.error('[RENDERER_INIT] settingsManager module not found!');
     }
@@ -1059,7 +868,7 @@ import { setupEventListeners } from './modules/event-listeners.js';
         // Initialize UI Manager after settings are loaded to ensure correct theme, widths, etc.
         if (window.uiManager) {
             await window.uiManager.init({
-                electronAPI: chatAPI,
+                electronAPI: window.electronAPI,
                 refs: {
                     globalSettingsRef: { get: () => globalSettings, set: (newSettings) => globalSettings = newSettings },
                 },
@@ -1088,7 +897,7 @@ import { setupEventListeners } from './modules/event-listeners.js';
         // Initialize Filter Manager
         if (window.filterManager) {
             window.filterManager.init({
-                electronAPI: chatAPI,
+                electronAPI: window.electronAPI,
                 uiHelper: uiHelperFunctions,
                 refs: {
                     globalSettingsRef: { get: () => globalSettings, set: (newSettings) => globalSettings = newSettings },
@@ -1134,72 +943,15 @@ import { setupEventListeners } from './modules/event-listeners.js';
         });
 
         // Emoticon panel event listener
-        if (attachFileBtn && emoticonTriggerBtn && window.emoticonManager) {
-            const syncEmoticonTriggerButton = () => {
-                emoticonTriggerBtn.disabled = attachFileBtn.disabled;
-            };
-
-            const openEmoticonPanel = (e) => {
+        if (attachFileBtn && window.emoticonManager) {
+            attachFileBtn.addEventListener('contextmenu', (e) => {
                 e.preventDefault();
-                if (emoticonTriggerBtn.disabled) return;
-                window.emoticonManager.togglePanel(emoticonTriggerBtn);
-            };
-
-            emoticonTriggerBtn.addEventListener('click', openEmoticonPanel);
-            emoticonTriggerBtn.addEventListener('contextmenu', openEmoticonPanel);
-
-            const emoticonTriggerObserver = new MutationObserver(syncEmoticonTriggerButton);
-            emoticonTriggerObserver.observe(attachFileBtn, {
-                attributes: true,
-                attributeFilter: ['disabled']
+                window.emoticonManager.togglePanel(attachFileBtn);
             });
-
-            syncEmoticonTriggerButton();
         }
 
         window.topicListManager.setupTopicSearch(); // Ensure this is called after DOM for topic search input is ready
         if(messageInput) uiHelperFunctions.autoResizeTextarea(messageInput);
-
-        if (quickNewTopicBtn && currentItemActionBtn) {
-            const syncQuickNewTopicButton = () => {
-                const isVisible = window.getComputedStyle(currentItemActionBtn).display !== 'none';
-                const buttonLabel = currentItemActionBtn.querySelector('.button-label')?.textContent?.trim();
-
-                quickNewTopicBtn.style.display = 'inline-flex';
-                quickNewTopicBtn.disabled = !isVisible;
-                quickNewTopicBtn.title = currentItemActionBtn.title || '新建聊天话题';
-
-                if (buttonLabel) {
-                    quickNewTopicBtn.setAttribute('aria-label', buttonLabel);
-                }
-            };
-
-            const forwardCurrentItemAction = (eventName) => {
-                if (quickNewTopicBtn.disabled) return;
-                currentItemActionBtn.dispatchEvent(new MouseEvent(eventName, {
-                    bubbles: true,
-                    cancelable: true,
-                    view: window
-                }));
-            };
-
-            quickNewTopicBtn.addEventListener('click', () => forwardCurrentItemAction('click'));
-            quickNewTopicBtn.addEventListener('contextmenu', (event) => {
-                event.preventDefault();
-                forwardCurrentItemAction('contextmenu');
-            });
-
-            const quickTopicObserver = new MutationObserver(syncQuickNewTopicButton);
-            quickTopicObserver.observe(currentItemActionBtn, {
-                attributes: true,
-                attributeFilter: ['style', 'title'],
-                childList: true,
-                subtree: true,
-                characterData: true
-            });
-
-            syncQuickNewTopicButton();
-        }
 
         // Set default view if no item is selected
         if (!currentSelectedItem.id) {
@@ -1209,11 +961,10 @@ import { setupEventListeners } from './modules/event-listeners.js';
         // Initialize Search Manager
         if (searchManager) {
             searchManager.init({
-                electronAPI: chatAPI,
+                electronAPI: window.electronAPI,
                 uiHelper: uiHelperFunctions,
                 refs: {
                     currentSelectedItemRef: { get: () => currentSelectedItem },
-                    currentTopicIdRef: { get: () => currentTopicId },
                 },
                 modules: {
                     chatManager: window.chatManager,
@@ -1224,26 +975,7 @@ import { setupEventListeners } from './modules/event-listeners.js';
         }
 
        // Emoticon URL fixer is now initialized within messageRenderer
-        window.__vcpRendererReady = true;
-
-        chatAPI.toggleSelectionListener(!!globalSettings.assistantEnabled);
-
-        if (window.__vcpPendingTopicSelection && window.chatManager) {
-            const pending = window.__vcpPendingTopicSelection;
-            window.__vcpPendingTopicSelection = null;
-            const matchesCurrentItem =
-                currentSelectedItem &&
-                currentSelectedItem.id === pending.itemId &&
-                currentSelectedItem.type === pending.itemType;
-
-            if (matchesCurrentItem) {
-                Promise.resolve(window.chatManager.selectTopic(pending.topicId)).catch((error) => {
-                    console.error('[Renderer] Failed to replay pending topic selection:', error);
-                });
-            }
-        }
     } catch (error) {
-        window.__vcpRendererReady = false;
         console.error('Error during DOMContentLoaded initialization:', error);
         chatMessagesDiv.innerHTML = `<div class="message-item system">初始化失败: ${error.message}</div>`;
     }
@@ -1251,8 +983,8 @@ import { setupEventListeners } from './modules/event-listeners.js';
     console.log('[Renderer DOMContentLoaded END] createNewGroupBtn textContent:', document.getElementById('createNewGroupBtn')?.textContent);
     
     // --- Agent Settings Reload Listener ---
-    if (chatAPI?.onReloadAgentSettings) {
-        chatAPI.onReloadAgentSettings(async ({ agentId }) => {
+    if (window.electronAPI && window.electronAPI.onReloadAgentSettings) {
+        window.electronAPI.onReloadAgentSettings(async ({ agentId }) => {
             console.log('[Renderer] Received reload-agent-settings event for agent:', agentId);
             if (window.settingsManager && typeof window.settingsManager.reloadAgentSettings === 'function') {
                 const result = await window.settingsManager.reloadAgentSettings(agentId);
@@ -1270,7 +1002,7 @@ import { setupEventListeners } from './modules/event-listeners.js';
     // --- TTS Audio Playback and Visuals ---
     setupTtsListeners();
     // --- File Watcher Listener ---
-    chatAPI.onHistoryFileUpdated(({ agentId, topicId, path }) => {
+    window.electronAPI.onHistoryFileUpdated(({ agentId, topicId, path }) => {
         if (currentSelectedItem && currentSelectedItem.id === agentId && currentTopicId === topicId) {
             console.log('[Renderer] Active chat history was modified externally. Syncing...');
             uiHelperFunctions.showToastNotification("聊天记录已同步。", "info");
@@ -1289,30 +1021,12 @@ import { setupEventListeners } from './modules/event-listeners.js';
     }
 
     // --- Listen for Flowlock commands from plugins (via main process) ---
-    if (chatAPI?.onFlowlockCommand) {
-        const respondToFlowlockRequest = (commandData, responseData) => {
-            if (!commandData?.requestId || !chatAPI?.sendFlowlockRpcResponse) {
-                return;
-            }
-
-            chatAPI.sendFlowlockRpcResponse({
-                requestId: commandData.requestId,
-                ok: responseData?.success !== false,
-                data: responseData?.success === false ? undefined : responseData,
-                error: responseData?.success === false ? responseData.error : undefined,
-            });
-        };
-
-        const flowlockCommandHandler = async (commandData) => {
+    if (window.electronAPI && window.electronAPI.onFlowlockCommand) {
+        window.electronAPI.onFlowlockCommand(async (commandData) => {
             console.log('[Renderer] Received flowlock command from plugin:', commandData);
             
             if (!window.flowlockManager) {
                 console.error('[Renderer] flowlockManager not available');
-                respondToFlowlockRequest(commandData, {
-                    command: commandData?.command,
-                    success: false,
-                    error: 'flowlockManager not available'
-                });
                 return;
             }
             
@@ -1447,18 +1161,23 @@ import { setupEventListeners } from './modules/event-listeners.js';
                             if (messageInput) {
                                 const content = messageInput.value;
                                 console.log(`[Renderer] Retrieved input box content: "${content}"`);
-                                respondToFlowlockRequest(commandData, {
-                                    command: 'get',
-                                    success: true,
-                                    content: content
-                                });
+                                // Send the content back to main process
+                                if (window.electronAPI && window.electronAPI.sendFlowlockResponse) {
+                                    window.electronAPI.sendFlowlockResponse({
+                                        command: 'get',
+                                        success: true,
+                                        content: content
+                                    });
+                                }
                             } else {
                                 console.error('[Renderer] Message input element not found');
-                                respondToFlowlockRequest(commandData, {
-                                    command: 'get',
-                                    success: false,
-                                    error: 'Message input element not found'
-                                });
+                                if (window.electronAPI && window.electronAPI.sendFlowlockResponse) {
+                                    window.electronAPI.sendFlowlockResponse({
+                                        command: 'get',
+                                        success: false,
+                                        error: 'Message input element not found'
+                                    });
+                                }
                             }
                         }
                         break;
@@ -1469,23 +1188,28 @@ import { setupEventListeners } from './modules/event-listeners.js';
                             if (window.flowlockManager) {
                                 const state = window.flowlockManager.getState();
                                 console.log(`[Renderer] Retrieved flowlock status:`, state);
-                                respondToFlowlockRequest(commandData, {
-                                    command: 'status',
-                                    success: true,
-                                    status: {
-                                        isActive: state.isActive,
-                                        isProcessing: state.isProcessing,
-                                        agentId: state.agentId,
-                                        topicId: state.topicId
-                                    }
-                                });
+                                // Send the status back to main process
+                                if (window.electronAPI && window.electronAPI.sendFlowlockResponse) {
+                                    window.electronAPI.sendFlowlockResponse({
+                                        command: 'status',
+                                        success: true,
+                                        status: {
+                                            isActive: state.isActive,
+                                            isProcessing: state.isProcessing,
+                                            agentId: state.agentId,
+                                            topicId: state.topicId
+                                        }
+                                    });
+                                }
                             } else {
                                 console.error('[Renderer] flowlockManager not available');
-                                respondToFlowlockRequest(commandData, {
-                                    command: 'status',
-                                    success: false,
-                                    error: 'flowlockManager not available'
-                                });
+                                if (window.electronAPI && window.electronAPI.sendFlowlockResponse) {
+                                    window.electronAPI.sendFlowlockResponse({
+                                        command: 'status',
+                                        success: false,
+                                        error: 'flowlockManager not available'
+                                    });
+                                }
                             }
                         }
                         break;
@@ -1496,12 +1220,7 @@ import { setupEventListeners } from './modules/event-listeners.js';
             } catch (error) {
                 console.error('[Renderer] Error executing flowlock command:', error);
             }
-        };
-
-        chatAPI.onFlowlockCommand(flowlockCommandHandler);
-        if (chatAPI.onFlowlockRequest) {
-            chatAPI.onFlowlockRequest(flowlockCommandHandler);
-        }
+        });
         console.log('[Renderer] Flowlock command listener initialized');
     }
 
@@ -1528,7 +1247,7 @@ function setupTtsListeners() {
     window.ensureAudioContext = initAudioContext;
 
     // 新的TTS播放逻辑：使用sessionId来处理异步时序问题
-    chatAPI.onPlayTtsAudio(async ({ audioData, msgId, sessionId }) => {
+    window.electronAPI.onPlayTtsAudio(async ({ audioData, msgId, sessionId }) => {
         // 如果收到的sessionId小于当前的，说明是过时的事件，直接忽略
         if (sessionId < currentTtsSessionId) {
             console.log(`[TTS Renderer] Discarding stale audio data from old session ${sessionId}. Current session is ${currentTtsSessionId}.`);
@@ -1615,7 +1334,7 @@ function setupTtsListeners() {
         }
     }
 
-    chatAPI.onStopTtsAudio(() => {
+    window.electronAPI.onStopTtsAudio(() => {
         console.error("!!!!!!!!!! [TTS RENDERER] STOP EVENT RECEIVED !!!!!!!!!!");
         
         // 关键：增加会话ID，使所有后续到达的、属于旧会话的play-tts-audio事件全部失效
@@ -1655,13 +1374,87 @@ function setupTtsListeners() {
 
 
 async function loadAndApplyGlobalSettings() {
-    const settings = await chatAPI.loadSettings();
+    const settings = await window.electronAPI.loadSettings();
     if (settings && !settings.error) {
         globalSettings = { ...globalSettings, ...settings }; // Merge with defaults
-        window.globalSettings = globalSettings;
-        applyChatBubbleLayoutSettings(globalSettings);
+        document.getElementById('userName').value = globalSettings.userName || '用户';
         
-        // 🟢 优化：仅更新始终存在的 UI 元素
+        // Load user custom colors
+        const userAvatarBorderColorInput = document.getElementById('userAvatarBorderColor');
+        const userAvatarBorderColorTextInput = document.getElementById('userAvatarBorderColorText');
+        const userNameTextColorInput = document.getElementById('userNameTextColor');
+        const userNameTextColorTextInput = document.getElementById('userNameTextColorText');
+        
+        if (userAvatarBorderColorInput && userAvatarBorderColorTextInput) {
+            const borderColor = globalSettings.userAvatarBorderColor || '#3d5a80';
+            userAvatarBorderColorInput.value = borderColor;
+            userAvatarBorderColorTextInput.value = borderColor;
+        }
+        
+        if (userNameTextColorInput && userNameTextColorTextInput) {
+            const nameColor = globalSettings.userNameTextColor || '#ffffff';
+            userNameTextColorInput.value = nameColor;
+            userNameTextColorTextInput.value = nameColor;
+        }
+        
+        // Load userUseThemeColorsInChat setting
+        const userUseThemeColorsInChatCheckbox = document.getElementById('userUseThemeColorsInChat');
+        if (userUseThemeColorsInChatCheckbox) {
+            userUseThemeColorsInChatCheckbox.checked = globalSettings.userUseThemeColorsInChat || false;
+        }
+        // Ensure the loaded URL is displayed in its complete form
+        const completedUrl = window.settingsManager.completeVcpUrl(globalSettings.vcpServerUrl || '');
+        document.getElementById('vcpServerUrl').value = completedUrl;
+        document.getElementById('vcpApiKey').value = globalSettings.vcpApiKey || '';
+        document.getElementById('vcpLogUrl').value = globalSettings.vcpLogUrl || '';
+        document.getElementById('vcpLogKey').value = globalSettings.vcpLogKey || '';
+        document.getElementById('topicSummaryModel').value = globalSettings.topicSummaryModel || '';
+        document.getElementById('continueWritingPrompt').value = globalSettings.continueWritingPrompt || '请继续';
+        document.getElementById('flowlockContinueDelay').value = globalSettings.flowlockContinueDelay !== undefined ? globalSettings.flowlockContinueDelay : 5;
+        
+        // --- Load Network Notes Paths ---
+        const networkNotesPathsContainer = document.getElementById('networkNotesPathsContainer');
+        networkNotesPathsContainer.innerHTML = ''; // Clear existing
+        const paths = Array.isArray(settings.networkNotesPaths)
+            ? settings.networkNotesPaths
+            : (settings.networkNotesPath ? [settings.networkNotesPath] : []);
+        
+        if (paths.length === 0) {
+            // Add one empty path input if none are saved
+            uiHelperFunctions.addNetworkPathInput('');
+        } else {
+            paths.forEach(path => uiHelperFunctions.addNetworkPathInput(path));
+        }
+        // --- End Load Network Notes Paths ---
+
+        // Load smooth streaming settings
+        document.getElementById('enableAgentBubbleTheme').checked = globalSettings.enableAgentBubbleTheme !== false; // Default to true
+        document.getElementById('enableSmoothStreaming').checked = globalSettings.enableSmoothStreaming === true; // Default to false
+        document.getElementById('minChunkBufferSize').value = globalSettings.minChunkBufferSize !== undefined ? globalSettings.minChunkBufferSize : 16;
+        document.getElementById('smoothStreamIntervalMs').value = globalSettings.smoothStreamIntervalMs !== undefined ? globalSettings.smoothStreamIntervalMs : 100;
+
+
+        // 管理用户头像的 .no-avatar 类
+        const userAvatarWrapper = userAvatarPreview?.closest('.agent-avatar-wrapper');
+        if (globalSettings.userAvatarUrl && userAvatarPreview) {
+            userAvatarPreview.src = globalSettings.userAvatarUrl; // Already has timestamp from main
+            userAvatarPreview.style.display = 'block';
+            if (userAvatarWrapper) {
+                userAvatarWrapper.classList.remove('no-avatar');
+            }
+        } else if (userAvatarPreview) {
+            userAvatarPreview.src = '#';
+            userAvatarPreview.style.display = 'none';
+            if (userAvatarWrapper) {
+                userAvatarWrapper.classList.add('no-avatar'); // 确保相机图标始终显示
+            }
+        }
+        if (window.messageRenderer) { // Update messageRenderer with user avatar info
+            window.messageRenderer.setUserAvatar(globalSettings.userAvatarUrl);
+            window.messageRenderer.setUserAvatarColor(globalSettings.userAvatarCalculatedColor);
+        }
+
+
         if (globalSettings.sidebarWidth && leftSidebar) {
             leftSidebar.style.width = `${globalSettings.sidebarWidth}px`;
         }
@@ -1673,573 +1466,113 @@ async function loadAndApplyGlobalSettings() {
 
         if (globalSettings.vcpLogUrl && globalSettings.vcpLogKey) {
             if (window.notificationRenderer) window.notificationRenderer.updateVCPLogStatus({ status: 'connecting', message: '连接中...' }, vcpLogConnectionStatusDiv);
-            chatAPI.connectVCPLog(globalSettings.vcpLogUrl, globalSettings.vcpLogKey);
+            window.electronAPI.connectVCPLog(globalSettings.vcpLogUrl, globalSettings.vcpLogKey);
         } else {
             if (window.notificationRenderer) window.notificationRenderer.updateVCPLogStatus({ status: 'error', message: 'VCPLog未配置' }, vcpLogConnectionStatusDiv);
+        }
+        
+        // Load assistant settings
+        // The container is now always visible in settings, just the agent selection.
+        assistantAgentContainer.style.display = 'block';
+        await window.settingsManager.populateAssistantAgentSelect();
+        if (globalSettings.assistantAgent) {
+            assistantAgentSelect.value = globalSettings.assistantAgent;
         }
 
         // Set the initial state of the new toggle button in the main UI
         if (toggleAssistantBtn) {
-            toggleAssistantBtn.classList.toggle('active', !!globalSettings.assistantEnabled);
-        }
-        // Selection listener startup moved to post-renderer-ready stage.
-
-        // Load filter mode setting
-        let filterEnabled = globalSettings.filterEnabled ?? globalSettings.doNotDisturbLogMode ?? (localStorage.getItem('doNotDisturbLogMode') === 'true');
-        globalSettings.filterEnabled = filterEnabled;
-        doNotDisturbBtn.classList.toggle('active', !!filterEnabled);
-
-        // 🟢 核心逻辑：监听模态框就绪事件，届时再同步模态框内部 UI
-        document.addEventListener('modal-ready', (e) => {
-            const { modalId } = e.detail;
-            if (modalId === 'globalSettingsModal') {
-                syncGlobalSettingsToUI();
+            if (globalSettings.assistantEnabled) {
+                toggleAssistantBtn.classList.add('active');
+            } else {
+                toggleAssistantBtn.classList.remove('active');
             }
-        });
-
-        if (window.messageRenderer) {
-            window.messageRenderer.setUserAvatar(globalSettings.userAvatarUrl);
-            window.messageRenderer.setUserAvatarColor(globalSettings.userAvatarCalculatedColor);
         }
+        
+        // Initial toggle of the listener based on settings
+        window.electronAPI.toggleSelectionListener(globalSettings.assistantEnabled);
+
+        // Load distributed server setting
+        document.getElementById('enableDistributedServer').checked = globalSettings.enableDistributedServer === true;
+        document.getElementById('agentMusicControl').checked = globalSettings.agentMusicControl === true;
+        document.getElementById('enableVcpToolInjection').checked = globalSettings.enableVcpToolInjection === true;
+        document.getElementById('enableContextSanitizer').checked = globalSettings.enableContextSanitizer === true;  
+        document.getElementById('contextSanitizerDepth').value = globalSettings.contextSanitizerDepth !== undefined ? globalSettings.contextSanitizerDepth : 2;  
+        // 同时更新深度容器的显示状态  
+        const contextSanitizerDepthContainer = document.getElementById('contextSanitizerDepthContainer');  
+        if (contextSanitizerDepthContainer) {
+            contextSanitizerDepthContainer.style.display = globalSettings.enableContextSanitizer === true ? 'block' : 'none';
+        }
+
+        // Load AI message button setting
+        document.getElementById('enableAiMessageButtons').checked = globalSettings.enableAiMessageButtons !== false; // Default to true
+
+        // Load filter mode setting (migrate from old doNotDisturbLogMode if exists)
+        let filterEnabled = globalSettings.filterEnabled;
+        if (filterEnabled === undefined) {
+            // Migrate from old doNotDisturbLogMode setting for backward compatibility
+            const oldDoNotDisturbMode = globalSettings.doNotDisturbLogMode || (localStorage.getItem('doNotDisturbLogMode') === 'true');
+            filterEnabled = oldDoNotDisturbMode;
+            globalSettings.filterEnabled = filterEnabled;
+            // Also migrate to new setting name for consistency
+            globalSettings.doNotDisturbLogMode = filterEnabled;
+        }
+
+        if (filterEnabled) {
+            doNotDisturbBtn.classList.add('active');
+            globalSettings.filterEnabled = true;
+        } else {
+            doNotDisturbBtn.classList.remove('active');
+            globalSettings.filterEnabled = false;
+        }
+
+        // Load filter rules
+        if (!Array.isArray(globalSettings.filterRules)) {
+            globalSettings.filterRules = [];
+        }
+
+        // Load middle click quick action settings
+        document.getElementById('enableMiddleClickQuickAction').checked = globalSettings.enableMiddleClickQuickAction === true;
+        document.getElementById('middleClickQuickAction').value = globalSettings.middleClickQuickAction || '';
+
+        // Load advanced middle click settings
+        document.getElementById('enableMiddleClickAdvanced').checked = globalSettings.enableMiddleClickAdvanced === true;
+        const advancedDelayInput = document.getElementById('middleClickAdvancedDelay');
+        const delayValue = globalSettings.middleClickAdvancedDelay || 1000;
+        advancedDelayInput.value = delayValue >= 1000 ? delayValue : 1000; // Ensure minimum 1000ms
+
+        // Load regenerate confirmation setting
+        const regenerateConfirmationCheckbox = document.getElementById('enableRegenerateConfirmation');
+        if (regenerateConfirmationCheckbox) {
+            regenerateConfirmationCheckbox.checked = globalSettings.enableRegenerateConfirmation !== false;
+        }
+
+        // Show/hide containers based on enable settings
+        const middleClickContainer = document.getElementById('middleClickQuickActionContainer');
+        const middleClickAdvancedContainer = document.getElementById('middleClickAdvancedContainer');
+        const middleClickAdvancedSettings = document.getElementById('middleClickAdvancedSettings');
+
+        if (middleClickContainer) {
+            middleClickContainer.style.display = globalSettings.enableMiddleClickQuickAction === true ? 'block' : 'none';
+        }
+        if (middleClickAdvancedContainer) {
+            middleClickAdvancedContainer.style.display = globalSettings.enableMiddleClickQuickAction === true ? 'block' : 'none';
+        }
+        if (middleClickAdvancedSettings) {
+            middleClickAdvancedSettings.style.display = globalSettings.enableMiddleClickAdvanced === true ? 'block' : 'none';
+        }
+
+        // Apply the theme mode from settings on startup
+        // This is now handled by uiManager.js to avoid redundancy
+        // if (globalSettings.currentThemeMode && window.electronAPI) {
+        //     console.log(`[Renderer] Applying initial theme mode from settings: ${globalSettings.currentThemeMode}`);
+        //     window.electronAPI.setThemeMode(globalSettings.currentThemeMode);
+        // }
+
     } else {
         console.warn('加载全局设置失败或无设置:', settings?.error);
         if (window.notificationRenderer) window.notificationRenderer.updateVCPLogStatus({ status: 'error', message: 'VCPLog未配置' }, vcpLogConnectionStatusDiv);
     }
 }
-
-function clampChatBubbleWidthPercent(value, fallback) {
-    const parsed = Number.parseInt(value, 10);
-    if (!Number.isFinite(parsed)) return fallback;
-    return Math.min(98, Math.max(50, parsed));
-}
-
-const CHAT_FONT_PRESETS = Object.freeze({
-    system: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol"',
-    segoe: '"Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif',
-    ubuntu: '"Ubuntu", "Segoe UI", "Microsoft YaHei UI", sans-serif',
-    yahei: '"Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif',
-    pingfang: '"PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", sans-serif',
-    'source-han': '"Source Han Sans SC", "Noto Sans CJK SC", "Microsoft YaHei UI", sans-serif',
-    serif: '"Noto Serif SC", "Source Han Serif SC", "Songti SC", Georgia, serif'
-});
-
-const CHAT_CODE_FONT_PRESETS = Object.freeze({
-    cascadia: '"Cascadia Code", "Consolas", "JetBrains Mono", monospace',
-    fira: '"Fira Code", "Consolas", "JetBrains Mono", monospace',
-    consolas: '"Consolas", "Monaco", "Courier New", monospace',
-    system: 'ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
-    jetbrains: '"JetBrains Mono", "Cascadia Code", "Fira Code", "Consolas", monospace',
-    monaspace: '"Monaspace Neon", "JetBrains Mono", "Cascadia Code", monospace'
-});
-
-const TOOL_CARD_FONT_PRESETS = Object.freeze({
-    ...CHAT_FONT_PRESETS,
-    cascadia: CHAT_CODE_FONT_PRESETS.cascadia,
-    fira: CHAT_CODE_FONT_PRESETS.fira,
-    consolas: CHAT_CODE_FONT_PRESETS.consolas,
-    jetbrains: CHAT_CODE_FONT_PRESETS.jetbrains,
-    monaspace: CHAT_CODE_FONT_PRESETS.monaspace
-});
-
-function sanitizeFontFamilyValue(value) {
-    if (typeof value !== 'string') return '';
-    return value.trim().replace(/[\r\n]+/g, ' ');
-}
-
-function resolveFontFamilyFromPreset(presetMap, presetKey, customValue, fallbackKey) {
-    const normalizedPreset = typeof presetKey === 'string' ? presetKey : fallbackKey;
-    if (normalizedPreset === 'custom') {
-        return sanitizeFontFamilyValue(customValue) || presetMap[fallbackKey];
-    }
-    return presetMap[normalizedPreset] || presetMap[fallbackKey];
-}
-
-function resolveChatFontFamily(settings = globalSettings) {
-    return resolveFontFamilyFromPreset(
-        CHAT_FONT_PRESETS,
-        settings?.chatFontPreset,
-        settings?.chatFontCustom,
-        'system'
-    );
-}
-
-function resolveChatCodeFontFamily(settings = globalSettings) {
-    return resolveFontFamilyFromPreset(
-        CHAT_CODE_FONT_PRESETS,
-        settings?.chatCodeFontPreset,
-        settings?.chatCodeFontCustom,
-        'consolas'
-    );
-}
-
-function resolveDiaryFontFamily(settings = globalSettings) {
-    return resolveFontFamilyFromPreset(
-        CHAT_FONT_PRESETS,
-        settings?.chatDiaryFontPreset,
-        settings?.chatDiaryFontCustom,
-        'serif'
-    );
-}
-
-function resolveToolFontFamily(settings = globalSettings) {
-    return resolveFontFamilyFromPreset(
-        TOOL_CARD_FONT_PRESETS,
-        settings?.chatToolFontPreset,
-        settings?.chatToolFontCustom,
-        'system'
-    );
-}
-
-function syncChatFontControl(selectId, customRowId) {
-    const presetSelect = document.getElementById(selectId);
-    const customRow = document.getElementById(customRowId);
-    if (!presetSelect || !customRow) return;
-    customRow.style.display = presetSelect.value === 'custom' ? 'block' : 'none';
-}
-
-function updateFontScenarioPreview() {
-    const bodyFontFamily = resolveChatFontFamily({
-        chatFontPreset: document.getElementById('chatFontPreset')?.value || 'system',
-        chatFontCustom: document.getElementById('chatFontCustom')?.value || ''
-    });
-    const codeFontFamily = resolveChatCodeFontFamily({
-        chatCodeFontPreset: document.getElementById('chatCodeFontPreset')?.value || 'consolas',
-        chatCodeFontCustom: document.getElementById('chatCodeFontCustom')?.value || ''
-    });
-    const diaryFontFamily = resolveDiaryFontFamily({
-        chatDiaryFontPreset: document.getElementById('chatDiaryFontPreset')?.value || 'serif',
-        chatDiaryFontCustom: document.getElementById('chatDiaryFontCustom')?.value || ''
-    });
-    const toolFontFamily = resolveToolFontFamily({
-        chatToolFontPreset: document.getElementById('chatToolFontPreset')?.value || 'system',
-        chatToolFontCustom: document.getElementById('chatToolFontCustom')?.value || ''
-    });
-
-    const bodyEl = document.getElementById('scenarioPreviewBody');
-    const codeEl = document.getElementById('scenarioPreviewCode');
-    const diaryEl = document.getElementById('scenarioPreviewDiary');
-    const toolEl = document.getElementById('scenarioPreviewTool');
-
-    if (bodyEl) bodyEl.style.fontFamily = bodyFontFamily;
-    if (codeEl) codeEl.style.fontFamily = codeFontFamily;
-    if (diaryEl) diaryEl.style.fontFamily = diaryFontFamily;
-    if (toolEl) toolEl.style.fontFamily = toolFontFamily;
-}
-
-function ensureScenarioFontSettingsMount(previewId, mountId) {
-    const previewEl = document.getElementById(previewId);
-    if (!previewEl) return null;
-
-    const card = previewEl.closest('.scenario-preview-card');
-    if (!card) return null;
-
-    let mountEl = document.getElementById(mountId);
-    if (!mountEl) {
-        mountEl = document.createElement('div');
-        mountEl.id = mountId;
-        mountEl.className = 'scenario-preview-settings-slot';
-        const noteEl = card.querySelector('.scenario-preview-note');
-        if (noteEl) {
-            card.insertBefore(mountEl, noteEl);
-        } else {
-            card.appendChild(mountEl);
-        }
-    }
-
-    return mountEl;
-}
-
-function mountChatFontSettingGroups() {
-    [
-        {
-            groupId: 'chatFontSettingsGroup',
-            previewId: 'scenarioPreviewBody',
-            mountId: 'chatFontSettingsMount'
-        },
-        {
-            groupId: 'chatCodeFontSettingsGroup',
-            previewId: 'scenarioPreviewCode',
-            mountId: 'chatCodeFontSettingsMount'
-        }
-    ].forEach(({ groupId, previewId, mountId }) => {
-        const groupEl = document.getElementById(groupId);
-        const mountEl = ensureScenarioFontSettingsMount(previewId, mountId);
-        if (!groupEl || !mountEl) return;
-
-        if (groupEl.parentElement !== mountEl) {
-            mountEl.appendChild(groupEl);
-        }
-
-        groupEl.style.marginTop = '0';
-        groupEl.style.marginBottom = '0';
-    });
-}
-
-function syncChatFontControls() {
-    mountChatFontSettingGroups();
-    syncChatFontControl('chatFontPreset', 'chatFontCustomRow');
-    syncChatFontControl('chatCodeFontPreset', 'chatCodeFontCustomRow');
-    syncChatFontControl('chatDiaryFontPreset', 'chatDiaryFontCustomRow');
-    syncChatFontControl('chatToolFontPreset', 'chatToolFontCustomRow');
-    updateFontScenarioPreview();
-}
-
-function syncWideChatLayoutControls() {
-    const wideModeRadio = document.getElementById('chatLayoutModeWide');
-    const widthSettings = document.getElementById('chatBubbleWidthSettings');
-    if (!wideModeRadio || !widthSettings) return;
-    widthSettings.style.display = wideModeRadio.checked ? 'block' : 'none';
-}
-
-function syncUserChatBubbleControls() {
-    const bubbleUiToggle = document.getElementById('enableUserChatBubbleUi');
-    const metaSettings = document.getElementById('userChatBubbleMetaSettings');
-    if (!bubbleUiToggle || !metaSettings) return;
-    metaSettings.style.display = bubbleUiToggle.checked ? 'flex' : 'none';
-}
-
-function applyUserChatBubbleUiState(settings = globalSettings) {
-    const applyLayoutState = window.domBuilder?.applyUserMessageLayoutState;
-    if (typeof applyLayoutState !== 'function') return;
-
-    document.querySelectorAll('.message-item.user').forEach((messageItem) => {
-        applyLayoutState(messageItem, settings);
-    });
-}
-
-function applyChatBubbleLayoutSettings(settings = globalSettings) {
-    const rootStyle = document.documentElement.style;
-    const resolvedSettings = settings || {};
-    const chatFontFamily = resolveChatFontFamily(resolvedSettings);
-    const chatCodeFontFamily = resolveChatCodeFontFamily(resolvedSettings);
-    const diaryFontFamily = resolveDiaryFontFamily(resolvedSettings);
-    const toolFontFamily = resolveToolFontFamily(resolvedSettings);
-
-    const defaultWidth = clampChatBubbleWidthPercent(resolvedSettings.chatBubbleMaxWidthDefault, 82);
-    const notificationsWidth = clampChatBubbleWidthPercent(resolvedSettings.chatBubbleMaxWidthNotifications, 90);
-    const narrowWidth = clampChatBubbleWidthPercent(resolvedSettings.chatBubbleMaxWidthNarrow, 85);
-    const wideDefaultWidth = clampChatBubbleWidthPercent(resolvedSettings.chatBubbleMaxWidthWideDefault, 92);
-    const wideNotificationsWidth = clampChatBubbleWidthPercent(resolvedSettings.chatBubbleMaxWidthWideNotifications, 96);
-    const wideNarrowWidth = clampChatBubbleWidthPercent(
-        resolvedSettings.chatBubbleMaxWidthWideNarrow,
-        wideDefaultWidth
-    );
-
-    rootStyle.setProperty('--chat-bubble-max-width', `${defaultWidth}%`);
-    rootStyle.setProperty('--chat-bubble-max-width-notifications', `${notificationsWidth}%`);
-    rootStyle.setProperty('--chat-bubble-max-width-narrow', `${narrowWidth}%`);
-    rootStyle.setProperty('--chat-bubble-max-width-wide', `${wideDefaultWidth}%`);
-    rootStyle.setProperty('--chat-bubble-max-width-wide-notifications', `${wideNotificationsWidth}%`);
-    rootStyle.setProperty('--chat-bubble-max-width-wide-narrow', `${wideNarrowWidth}%`);
-    rootStyle.setProperty('--vcp-chat-font-family', chatFontFamily);
-    rootStyle.setProperty('--vcp-chat-code-font-family', chatCodeFontFamily);
-    rootStyle.setProperty('--vcp-diary-font-family', diaryFontFamily);
-    rootStyle.setProperty('--vcp-tool-card-font-family', toolFontFamily);
-    rootStyle.setProperty('--font-family', chatFontFamily);
-    rootStyle.setProperty('--font-family-sans-serif', chatFontFamily);
-    rootStyle.setProperty('--font-family-monospace', chatCodeFontFamily);
-
-    if (window.pretextBridge && typeof window.pretextBridge.setChatFonts === 'function') {
-        window.pretextBridge.setChatFonts(chatFontFamily, chatCodeFontFamily);
-    }
-
-    if (document.body) {
-        document.body.classList.toggle('chat-wide-layout', resolvedSettings.enableWideChatLayout === true);
-    }
-    applyUserChatBubbleUiState(resolvedSettings);
-}
-
-/**
- * 🟢 将全局设置同步到 UI 元素（仅在模态框实例化后调用）
- */
-async function syncGlobalSettingsToUI() {
-    const safeSet = (id, value, prop = 'value') => {
-        const el = document.getElementById(id);
-        if (el) el[prop] = value;
-    };
-    const safeCheck = (id, checked) => {
-        const el = document.getElementById(id);
-        if (el) el.checked = !!checked;
-    };
-    const syncRustDebugPanelVisibility = () => {
-        const rustDebugModeEl = document.getElementById('rustDebugMode');
-        const rustDebugPanelEl = document.getElementById('rustDebugPanel');
-        if (rustDebugPanelEl) {
-            rustDebugPanelEl.style.display = rustDebugModeEl?.checked ? 'block' : 'none';
-        }
-    };
-    const joinKeywords = (value) => Array.isArray(value) ? value.join('\n') : '';
-    const shouldShowRustGuardRules = () => {
-        const useRust = document.getElementById('rustUseAssistant')?.checked === true;
-        return useRust;
-    };
-    const syncRustGuardRulesVisibility = () => {
-        const container = document.getElementById('rustGuardRulesContainer');
-        if (container) {
-            container.style.display = shouldShowRustGuardRules() ? 'block' : 'none';
-        }
-    };
-
-    safeSet('userName', globalSettings.userName || '用户');
-    
-    const borderColor = globalSettings.userAvatarBorderColor || '#3d5a80';
-    safeSet('userAvatarBorderColor', borderColor);
-    safeSet('userAvatarBorderColorText', borderColor);
-    
-    const nameColor = globalSettings.userNameTextColor || '#ffffff';
-    safeSet('userNameTextColor', nameColor);
-    safeSet('userNameTextColorText', nameColor);
-    
-    safeCheck('userUseThemeColorsInChat', globalSettings.userUseThemeColorsInChat);
-    
-    const completedUrl = window.settingsManager.completeVcpUrl(globalSettings.vcpServerUrl || '');
-    safeSet('vcpServerUrl', completedUrl);
-    safeSet('vcpApiKey', globalSettings.vcpApiKey || '');
-    safeSet('fileKey', globalSettings.fileKey || '');
-    safeSet('vcpLogUrl', globalSettings.vcpLogUrl || '');
-    safeSet('vcpLogKey', globalSettings.vcpLogKey || '');
-    safeSet('topicSummaryModel', globalSettings.topicSummaryModel || '');
-    safeSet('continueWritingPrompt', globalSettings.continueWritingPrompt || '请继续');
-    safeSet('flowlockContinueDelay', globalSettings.flowlockContinueDelay ?? 5);
-    safeCheck('voiceModeLocal', (globalSettings.voiceMode || 'local') !== 'network');
-    safeCheck('voiceModeNetwork', (globalSettings.voiceMode || 'local') === 'network');
-    safeSet('speechRecognizerBrowserPath', globalSettings.speechRecognizerBrowserPath || '');
-    safeSet('speechRecognizerPagePath', globalSettings.speechRecognizerPagePath || 'Voicechatmodules/recognizer.html');
-    safeSet('voiceLocalSovitsUrl', globalSettings.voiceLocalSettings?.sovitsUrl || '');
-    safeSet('voiceLocalSovitsKey', globalSettings.voiceLocalSettings?.sovitsKey || '');
-    safeSet('voiceNetworkProviderUrl', globalSettings.voiceNetworkSettings?.providerUrl || '');
-    safeSet('voiceNetworkProviderKey', globalSettings.voiceNetworkSettings?.providerKey || '');
-    
-    // Network Notes Paths
-    const networkNotesPathsContainer = document.getElementById('networkNotesPathsContainer');
-    if (networkNotesPathsContainer) {
-        networkNotesPathsContainer.innerHTML = '';
-        const paths = Array.isArray(globalSettings.networkNotesPaths) ? globalSettings.networkNotesPaths : (globalSettings.networkNotesPath ? [globalSettings.networkNotesPath] : []);
-        if (paths.length === 0) {
-            uiHelperFunctions.addNetworkPathInput('');
-        } else {
-            paths.forEach(path => uiHelperFunctions.addNetworkPathInput(path));
-        }
-    }
-
-    safeCheck('enableAgentBubbleTheme', globalSettings.enableAgentBubbleTheme !== false);
-    safeCheck('enableSmoothStreaming', globalSettings.enableSmoothStreaming === true);
-    safeSet('chatFontPreset', globalSettings.chatFontPreset || 'system');
-    safeSet('chatFontCustom', globalSettings.chatFontCustom || '');
-    safeSet('chatCodeFontPreset', globalSettings.chatCodeFontPreset || 'consolas');
-    safeSet('chatCodeFontCustom', globalSettings.chatCodeFontCustom || '');
-    safeSet('chatDiaryFontPreset', globalSettings.chatDiaryFontPreset || 'serif');
-    safeSet('chatDiaryFontCustom', globalSettings.chatDiaryFontCustom || '');
-    safeSet('chatToolFontPreset', globalSettings.chatToolFontPreset || 'system');
-    safeSet('chatToolFontCustom', globalSettings.chatToolFontCustom || '');
-    safeCheck('chatLayoutModeWide', globalSettings.enableWideChatLayout === true);
-    safeCheck('chatLayoutModeNormal', globalSettings.enableWideChatLayout !== true);
-    safeCheck('enableUserChatBubbleUi', globalSettings.enableUserChatBubbleUi !== false);
-    safeCheck('showUserMetaInChatBubbleUi', globalSettings.showUserMetaInChatBubbleUi !== false);
-    safeSet('chatBubbleMaxWidthWideDefault', clampChatBubbleWidthPercent(globalSettings.chatBubbleMaxWidthWideDefault, 92));
-    safeSet('chatBubbleMaxWidthWideNotifications', clampChatBubbleWidthPercent(globalSettings.chatBubbleMaxWidthWideNotifications, 96));
-    safeSet(
-        'chatBubbleMaxWidthWideNarrow',
-        clampChatBubbleWidthPercent(
-            globalSettings.chatBubbleMaxWidthWideNarrow,
-            clampChatBubbleWidthPercent(globalSettings.chatBubbleMaxWidthWideDefault, 92)
-        )
-    );
-    safeSet('minChunkBufferSize', globalSettings.minChunkBufferSize ?? 16);
-    safeSet('smoothStreamIntervalMs', globalSettings.smoothStreamIntervalMs ?? 100);
-    syncChatFontControls();
-    syncWideChatLayoutControls();
-    syncUserChatBubbleControls();
-
-    const chatFontPresetSelect = document.getElementById('chatFontPreset');
-    const chatFontCustomInput = document.getElementById('chatFontCustom');
-    const chatCodeFontPresetSelect = document.getElementById('chatCodeFontPreset');
-    const chatCodeFontCustomInput = document.getElementById('chatCodeFontCustom');
-    const chatDiaryFontPresetSelect = document.getElementById('chatDiaryFontPreset');
-    const chatDiaryFontCustomInput = document.getElementById('chatDiaryFontCustom');
-    const chatToolFontPresetSelect = document.getElementById('chatToolFontPreset');
-    const chatToolFontCustomInput = document.getElementById('chatToolFontCustom');
-    const wideModeRadio = document.getElementById('chatLayoutModeWide');
-    const normalModeRadio = document.getElementById('chatLayoutModeNormal');
-    const userBubbleUiToggle = document.getElementById('enableUserChatBubbleUi');
-    if (chatFontPresetSelect && !chatFontPresetSelect.dataset.boundFontToggle) {
-        chatFontPresetSelect.addEventListener('change', syncChatFontControls);
-        chatFontPresetSelect.dataset.boundFontToggle = 'true';
-    }
-    if (chatCodeFontPresetSelect && !chatCodeFontPresetSelect.dataset.boundFontToggle) {
-        chatCodeFontPresetSelect.addEventListener('change', syncChatFontControls);
-        chatCodeFontPresetSelect.dataset.boundFontToggle = 'true';
-    }
-    if (chatDiaryFontPresetSelect && !chatDiaryFontPresetSelect.dataset.boundFontToggle) {
-        chatDiaryFontPresetSelect.addEventListener('change', syncChatFontControls);
-        chatDiaryFontPresetSelect.dataset.boundFontToggle = 'true';
-    }
-    if (chatToolFontPresetSelect && !chatToolFontPresetSelect.dataset.boundFontToggle) {
-        chatToolFontPresetSelect.addEventListener('change', syncChatFontControls);
-        chatToolFontPresetSelect.dataset.boundFontToggle = 'true';
-    }
-    if (chatFontCustomInput && !chatFontCustomInput.dataset.boundFontPreview) {
-        chatFontCustomInput.addEventListener('input', updateFontScenarioPreview);
-        chatFontCustomInput.dataset.boundFontPreview = 'true';
-    }
-    if (chatCodeFontCustomInput && !chatCodeFontCustomInput.dataset.boundFontPreview) {
-        chatCodeFontCustomInput.addEventListener('input', updateFontScenarioPreview);
-        chatCodeFontCustomInput.dataset.boundFontPreview = 'true';
-    }
-    if (chatDiaryFontCustomInput && !chatDiaryFontCustomInput.dataset.boundFontPreview) {
-        chatDiaryFontCustomInput.addEventListener('input', updateFontScenarioPreview);
-        chatDiaryFontCustomInput.dataset.boundFontPreview = 'true';
-    }
-    if (chatToolFontCustomInput && !chatToolFontCustomInput.dataset.boundFontPreview) {
-        chatToolFontCustomInput.addEventListener('input', updateFontScenarioPreview);
-        chatToolFontCustomInput.dataset.boundFontPreview = 'true';
-    }
-    if (wideModeRadio && !wideModeRadio.dataset.boundWideChatToggle) {
-        wideModeRadio.addEventListener('change', syncWideChatLayoutControls);
-        wideModeRadio.dataset.boundWideChatToggle = 'true';
-    }
-    if (normalModeRadio && !normalModeRadio.dataset.boundWideChatToggle) {
-        normalModeRadio.addEventListener('change', syncWideChatLayoutControls);
-        normalModeRadio.dataset.boundWideChatToggle = 'true';
-    }
-    if (userBubbleUiToggle && !userBubbleUiToggle.dataset.boundUserBubbleToggle) {
-        userBubbleUiToggle.addEventListener('change', syncUserChatBubbleControls);
-        userBubbleUiToggle.dataset.boundUserBubbleToggle = 'true';
-    }
-
-    // User Avatar Preview
-    const userAvatarPreview = document.getElementById('userAvatarPreview');
-    const userAvatarWrapper = userAvatarPreview?.closest('.agent-avatar-wrapper');
-    if (userAvatarPreview) {
-        if (globalSettings.userAvatarUrl) {
-            userAvatarPreview.src = globalSettings.userAvatarUrl;
-            userAvatarPreview.style.display = 'block';
-            userAvatarWrapper?.classList.remove('no-avatar');
-        } else {
-            userAvatarPreview.src = '#';
-            userAvatarPreview.style.display = 'none';
-            userAvatarWrapper?.classList.add('no-avatar');
-        }
-    }
-
-    // 加载论坛配置并填充管理员账号/密码
-    try {
-        const forumConfig = await chatAPI.loadForumConfig();
-        if (forumConfig && !forumConfig.error) {
-            safeSet('adminUsername', forumConfig.username || '');
-            safeSet('adminPassword', forumConfig.password || '');
-        }
-    } catch (err) {
-        console.warn('[Renderer] Failed to load forum config for global settings:', err);
-    }
-
-    // Assistant Select
-    const assistantAgentSelect = document.getElementById('assistantAgent');
-    if (assistantAgentSelect) {
-        await window.settingsManager.populateAssistantAgentSelect();
-        assistantAgentSelect.value = globalSettings.assistantAgent || '';
-    }
-
-    safeCheck('enableDistributedServer', globalSettings.enableDistributedServer === true);
-    safeCheck('agentMusicControl', globalSettings.agentMusicControl === true);
-    safeCheck('enableVcpToolInjection', globalSettings.enableVcpToolInjection === true);
-    safeCheck('enableThoughtChainInjection', globalSettings.enableThoughtChainInjection === true);
-    safeCheck('enableContextSanitizer', globalSettings.enableContextSanitizer === true);
-    safeSet('contextSanitizerDepth', globalSettings.contextSanitizerDepth ?? 2);
-    
-    const contextSanitizerDepthContainer = document.getElementById('contextSanitizerDepthContainer');
-    if (contextSanitizerDepthContainer) {
-        contextSanitizerDepthContainer.style.display = globalSettings.enableContextSanitizer === true ? 'block' : 'none';
-    }
-
-    safeCheck('enableAiMessageButtons', globalSettings.enableAiMessageButtons !== false);
-    safeCheck('enableMiddleClickQuickAction', globalSettings.enableMiddleClickQuickAction === true);
-    safeSet('middleClickQuickAction', globalSettings.middleClickQuickAction || '');
-    safeCheck('enableMiddleClickAdvanced', globalSettings.enableMiddleClickAdvanced === true);
-    safeSet('middleClickAdvancedDelay', Math.max(1000, globalSettings.middleClickAdvancedDelay ?? 1000));
-    safeCheck('enableRegenerateConfirmation', globalSettings.enableRegenerateConfirmation !== false);
-
-    if (chatAPI?.getRustAssistantConfig) {
-        try {
-            const rustConfig = await chatAPI.getRustAssistantConfig();
-            if (rustConfig && !rustConfig.error) {
-                safeCheck('rustUseAssistant', rustConfig.useRustAssistant === true);
-                safeCheck('rustDebugMode', rustConfig.debugMode === true);
-                safeSet('rustWhitelistKeywords', joinKeywords(rustConfig.whitelist || []));
-                safeSet('rustBlacklistKeywords', joinKeywords(rustConfig.blacklist || []));
-                safeSet('rustScreenshotApps', joinKeywords(rustConfig.screenshotApps || []));
-                syncRustDebugPanelVisibility();
-                syncRustGuardRulesVisibility();
-
-                const rustDebugModeEl = document.getElementById('rustDebugMode');
-                if (rustDebugModeEl && !rustDebugModeEl.dataset.debugPanelBound) {
-                    rustDebugModeEl.addEventListener('change', syncRustDebugPanelVisibility);
-                    rustDebugModeEl.dataset.debugPanelBound = 'true';
-                }
-
-                const rustUseAssistantEl = document.getElementById('rustUseAssistant');
-                if (rustUseAssistantEl && !rustUseAssistantEl.dataset.guardPanelBound) {
-                    rustUseAssistantEl.addEventListener('change', syncRustGuardRulesVisibility);
-                    rustUseAssistantEl.dataset.guardPanelBound = 'true';
-                }
-
-            }
-        } catch (error) {
-            console.warn('[Renderer] Failed to sync Rust assistant config:', error);
-        }
-    }
-
-    if (chatAPI?.getAssistantRuntimeStatus && document.getElementById('rustDebugMode')?.checked) {
-        try {
-            const runtime = await chatAPI.getAssistantRuntimeStatus();
-            if (runtime && runtime.success) {
-                const modeText = runtime.mode === 'rust'
-                    ? 'Rust'
-                    : (runtime.mode === 'disabled' ? 'Disabled' : runtime.mode || 'Unknown');
-                const desiredText = runtime.desiredMode === 'rust'
-                    ? 'Rust'
-                    : (runtime.desiredMode === 'disabled' ? 'Disabled' : runtime.desiredMode || 'Unknown');
-                const activeText = runtime.active ? '运行中' : '未运行';
-                const debugReasonText = runtime.lastDebugReason || '无';
-                const forwardedCount = runtime.forwardedEventCount || 0;
-                const sidecarActiveText = runtime.rustSidecarListenerActive === null
-                    ? '未知'
-                    : (runtime.rustSidecarListenerActive ? '是' : '否');
-                const processAliveText = runtime.adapterProcessAlive ? '运行中' : '未运行';
-                const processPidText = runtime.adapterProcessPid ? String(runtime.adapterProcessPid) : '无';
-                const autoFallbackCount = runtime.runtimeFallbackTrace?.autoFallbackCount || 0;
-                const autoFallbackReason = runtime.runtimeFallbackTrace?.lastAutoFallbackReason || '无';
-                const receivedCount = runtime.integrationTrace?.receivedSelectionCount || 0;
-                const showAttemptCount = runtime.integrationTrace?.showAttemptCount || 0;
-                const showErrorText = runtime.integrationTrace?.lastShowError || '无';
-                safeSet('assistantRuntimeMode', modeText, 'textContent');
-                safeSet('assistantRuntimeDesiredMode', desiredText, 'textContent');
-                safeSet('assistantRuntimeActive', activeText, 'textContent');
-                safeSet('assistantRuntimeDebugReason', debugReasonText, 'textContent');
-                safeSet('assistantRuntimeForwardedCount', String(forwardedCount), 'textContent');
-                safeSet('assistantRuntimeSidecarActive', sidecarActiveText, 'textContent');
-                safeSet('assistantRuntimeProcessAlive', processAliveText, 'textContent');
-                safeSet('assistantRuntimeProcessPid', processPidText, 'textContent');
-                safeSet('assistantRuntimeAutoFallbackCount', String(autoFallbackCount), 'textContent');
-                safeSet('assistantRuntimeAutoFallbackReason', autoFallbackReason, 'textContent');
-                safeSet('assistantRuntimeReceivedCount', String(receivedCount), 'textContent');
-                safeSet('assistantRuntimeShowAttemptCount', String(showAttemptCount), 'textContent');
-                safeSet('assistantRuntimeShowError', showErrorText, 'textContent');
-            }
-        } catch (error) {
-            console.warn('[Renderer] Failed to load assistant runtime status:', error);
-        }
-    }
-
-    // Visibility toggles
-    const middleClickContainer = document.getElementById('middleClickQuickActionContainer');
-    if (middleClickContainer) middleClickContainer.style.display = globalSettings.enableMiddleClickQuickAction ? 'block' : 'none';
-    const middleClickAdvancedContainer = document.getElementById('middleClickAdvancedContainer');
-    if (middleClickAdvancedContainer) middleClickAdvancedContainer.style.display = globalSettings.enableMiddleClickQuickAction ? 'block' : 'none';
-    const middleClickAdvancedSettings = document.getElementById('middleClickAdvancedSettings');
-    if (middleClickAdvancedSettings) middleClickAdvancedSettings.style.display = globalSettings.enableMiddleClickAdvanced ? 'block' : 'none';
-}
-
 // --- Chat Functionality ---
 // --- UI Event Listeners & Helpers ---
 // These functions have been moved to modules/ui-helpers.js
@@ -2294,27 +1627,20 @@ let selectedForwardTarget = null;
 async function showForwardModal(message) {
     messageToForward = message;
     selectedForwardTarget = null; // Reset selection
-    
-    // 🟢 修复：先调用 openModal 确保从模板实例化 DOM 元素
-    uiHelperFunctions.openModal('forwardMessageModal');
-
     const modal = document.getElementById('forwardMessageModal');
     const targetList = document.getElementById('forwardTargetList');
     const searchInput = document.getElementById('forwardTargetSearch');
     const commentInput = document.getElementById('forwardAdditionalComment');
     const confirmBtn = document.getElementById('confirmForwardBtn');
 
-    if (!targetList || !searchInput || !commentInput || !confirmBtn) {
-        console.error("[Forward Modal] Elements not found even after modal open!");
-        return;
-    }
-
     targetList.innerHTML = '<li>Loading...</li>';
     commentInput.value = '';
     searchInput.value = '';
     confirmBtn.disabled = true;
 
-    const result = await chatAPI.getAllItems();
+    uiHelperFunctions.openModal('forwardMessageModal');
+
+    const result = await window.electronAPI.getAllItems();
     if (result.success) {
         renderForwardTargetList(result.items);
     } else {
@@ -2382,7 +1708,7 @@ async function handleConfirmForward() {
     const additionalComment = document.getElementById('forwardAdditionalComment').value.trim();
     
     // We need to get the original message from history to ensure we have all data
-    const originalMessageResult = await chatAPI.getOriginalMessageContent(
+    const originalMessageResult = await window.electronAPI.getOriginalMessageContent(
         currentSelectedItem.id,
         currentSelectedItem.type,
         currentTopicId,
@@ -2437,7 +1763,6 @@ window.ensureAudioContext = () => { /* Placeholder, will be defined in setupTtsL
 window.showForwardModal = showForwardModal;
 
 // Make globalSettings accessible for notification renderer
-window.applyChatBubbleLayoutSettings = applyChatBubbleLayoutSettings;
 window.globalSettings = globalSettings;
 
 // Make filter functions globally accessible for notification renderer

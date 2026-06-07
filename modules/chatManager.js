@@ -273,7 +273,7 @@ window.chatManager = (() => {
     // --- Functions moved from renderer.js ---
  
     function displayNoItemSelected() {
-        const { currentChatNameH3, chatMessagesDiv, currentItemActionBtn, messageInput, sendMessageBtn, attachFileBtn } = elements;
+        const { currentChatNameH3, chatMessagesDiv, currentItemActionBtn, messageInput, sendMessageBtn, attachFileBtn, voiceInputBtn } = elements;
         const voiceChatBtn = document.getElementById('voiceChatBtn');
         currentChatNameH3.textContent = '选择一个 Agent 或群组开始聊天';
         chatMessagesDiv.innerHTML = `<div class="message-item system welcome-bubble"><p>欢迎，请从左侧选择 AI 助手或群组，或创建新的对话。</p></div>`;
@@ -282,6 +282,7 @@ window.chatManager = (() => {
         messageInput.disabled = true;
         sendMessageBtn.disabled = true;
         attachFileBtn.disabled = true;
+        if (voiceInputBtn) voiceInputBtn.disabled = true;
         if (mainRendererFunctions.displaySettingsForItem) {
             mainRendererFunctions.displaySettingsForItem(); 
         }
@@ -303,7 +304,7 @@ window.chatManager = (() => {
             await electronAPI.watcherStop();
         }
 
-        const { currentChatNameH3, currentItemActionBtn, messageInput, sendMessageBtn, attachFileBtn } = elements;
+        const { currentChatNameH3, currentItemActionBtn, messageInput, sendMessageBtn, attachFileBtn, voiceInputBtn } = elements;
         let currentSelectedItem = currentSelectedItemRef.get();
         let currentTopicId = currentTopicIdRef.get();
 
@@ -414,6 +415,7 @@ window.chatManager = (() => {
         messageInput.disabled = false;
         sendMessageBtn.disabled = false;
         attachFileBtn.disabled = false;
+        if (voiceInputBtn) voiceInputBtn.disabled = false;
         // messageInput.focus();
         if (topicListManager) topicListManager.loadTopicList();
         _saveLastOpenState(); // Save state after selecting an item and its default topic

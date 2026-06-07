@@ -1,20 +1,12 @@
 /**
  * This module encapsulates all event listener setup logic for the main renderer process.
  */
-
+ 
 import { handleSaveGlobalSettings } from './global-settings-manager.js';
-
-let eventListenersBound = false;
 
 // This function will be called from renderer.js to attach all event listeners.
 // It receives a 'deps' object containing all necessary references to elements, state, and functions.
 export function setupEventListeners(deps) {
-    if (eventListenersBound) {
-        console.warn('[EventListeners] setupEventListeners already initialized, skipping duplicate binding.');
-        return;
-    }
-    eventListenersBound = true;
-    const chatAPI = window.chatAPI || window.electronAPI;
     const {
         // DOM Elements from a future dom-elements.js or passed directly
         chatMessagesDiv, voiceInputBtn, sendMessageBtn, messageInput, attachFileBtn, globalSettingsBtn,
@@ -33,28 +25,6 @@ export function setupEventListeners(deps) {
         getCroppedFile, setCroppedFile, updateAttachmentPreview, filterAgentList,
         addNetworkPathInput
     } = deps;
-
-    const setupAutoHideScrollbar = (container, hideDelayMs = 700) => {
-        if (!container) return;
-        if (container.dataset.autoHideScrollbarBound === 'true') return;
-
-        let hideTimer = null;
-        const showScrollingState = () => {
-            container.classList.add('is-scrolling');
-            if (hideTimer) clearTimeout(hideTimer);
-            hideTimer = setTimeout(() => {
-                container.classList.remove('is-scrolling');
-                hideTimer = null;
-            }, hideDelayMs);
-        };
-
-        container.addEventListener('scroll', showScrollingState, { passive: true });
-        container.dataset.autoHideScrollbarBound = 'true';
-    };
-
-    setupAutoHideScrollbar(document.querySelector('#tabContentAgents .sidebar-list-scroll'));
-    setupAutoHideScrollbar(document.querySelector('#tabContentTopics .sidebar-list-scroll'));
-    setupAutoHideScrollbar(chatMessagesDiv?.closest('.chat-messages-container'), 1500);
 
     // --- Keyboard Shortcut Handlers ---
 
@@ -134,13 +104,7 @@ export function setupEventListeners(deps) {
 
                 if (senderElement && contentElement) {
                     const sender = senderElement.textContent.trim().replace(':', '');
-                    // 克隆节点，移除思维链气泡后再取文本（<think> 已渲染为 DOM 节点）
-                    const contentClone = contentElement.cloneNode(true);
-                    contentClone.querySelectorAll('.vcp-thought-chain-bubble').forEach(el => el.remove());
-                    let content = contentClone.innerText || contentClone.textContent || "";
-                    // 兜底：清理明文形式思维链
-                    content = content.replace(/\[--- VCP元思考链(?::\s*"[^"]*")?\s*---\][\s\S]*?\[--- 元思考链结束 ---\]/gs, '');
-                    content = content.replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, '');
+                    let content = contentElement.innerText || contentElement.textContent || "";
                     content = content.trim();
 
                     if (sender && content) {
@@ -155,7 +119,7 @@ export function setupEventListeners(deps) {
                 return;
             }
 
-            const result = await chatAPI.exportTopicAsMarkdown({
+            const result = await window.electronAPI.exportTopicAsMarkdown({
                 topicName: topicName,
                 markdownContent: markdownContent
             });
@@ -187,20 +151,20 @@ export function setupEventListeners(deps) {
             uiHelperFunctions.showToastNotification('请先选择一个项目和话题', 'warning');
             return;
         }
-
+        
         if (!globalSettings.vcpServerUrl) {
             uiHelperFunctions.showToastNotification('请先在全局设置中配置VCP服务器URL！', 'error');
             uiHelperFunctions.openModal('globalSettingsModal');
             return;
         }
-
+        
         if (currentSelectedItem.type === 'group') {
             uiHelperFunctions.showToastNotification('群组聊天暂不支持续写功能', 'warning');
             return;
         }
-
+        
         const lastAiMessage = [...currentChatHistory].reverse().find(msg => msg.role === 'assistant' && !msg.isThinking);
-
+        
         // 改进：即使没有AI消息，也允许续写（让当前Agent开始发言）
         // 区分两种情况：
         // 1. 有AI消息：使用续写提示词（附加提示词或默认续写提示词）
@@ -214,7 +178,7 @@ export function setupEventListeners(deps) {
             // 有AI消息时，使用续写逻辑：优先使用附加提示词，否则使用默认续写提示词
             temporaryPrompt = additionalPrompt || globalSettings.continueWritingPrompt || '请继续';
         }
-
+        
         const thinkingMessageId = `regen_${Date.now()}`;
         const thinkingMessage = {
             role: 'assistant',
@@ -226,24 +190,24 @@ export function setupEventListeners(deps) {
             avatarUrl: currentSelectedItem.avatarUrl,
             avatarColor: (currentSelectedItem.config || currentSelectedItem)?.avatarCalculatedColor
         };
-
+        
         let thinkingMessageItem = null;
         if (window.messageRenderer) {
             thinkingMessageItem = await window.messageRenderer.renderMessage(thinkingMessage);
         }
         currentChatHistory.push(thinkingMessage);
-
+        
         try {
             const agentConfig = currentSelectedItem.config || currentSelectedItem;
             let historySnapshotForVCP = currentChatHistory.filter(msg => msg.id !== thinkingMessage.id && !msg.isThinking);
-
+            
             // 只有当有提示词时才添加临时用户消息
             // 如果 temporaryPrompt 为空，说明是无AI消息且无输入的情况，让AI基于现有上下文自然开始
             if (temporaryPrompt && temporaryPrompt.trim()) {
                 const temporaryUserMessage = { role: 'user', content: temporaryPrompt };
                 historySnapshotForVCP = [...historySnapshotForVCP, temporaryUserMessage];
             }
-
+            
             const messagesForVCP = await Promise.all(historySnapshotForVCP.map(async msg => {
                 let currentMessageTextContent = '';
                 if (typeof msg.content === 'string') {
@@ -260,16 +224,16 @@ export function setupEventListeners(deps) {
                 }
                 return { role: msg.role, content: currentMessageTextContent };
             }));
-
+            
             if (agentConfig && agentConfig.systemPrompt) {
                 let systemPromptContent = agentConfig.systemPrompt.replace(/\{\{AgentName\}\}/g, agentConfig.name || currentSelectedItem.id);
                 const prependedContent = [];
-
+                
                 if (agentConfig.agentDataPath && currentTopicId) {
                     const historyPath = `${agentConfig.agentDataPath}\\topics\\${currentTopicId}\\history.json`;
                     prependedContent.push(`当前聊天记录文件路径: ${historyPath}`);
                 }
-
+                
                 if (agentConfig.topics && currentTopicId) {
                     const currentTopicObj = agentConfig.topics.find(t => t.id === currentTopicId);
                     if (currentTopicObj && currentTopicObj.createdAt) {
@@ -278,14 +242,14 @@ export function setupEventListeners(deps) {
                         prependedContent.push(`当前话题创建于: ${formattedDate}`);
                     }
                 }
-
+                
                 if (prependedContent.length > 0) {
                     systemPromptContent = prependedContent.join('\n') + '\n\n' + systemPromptContent;
                 }
-
+                
                 messagesForVCP.unshift({ role: 'system', content: systemPromptContent });
             }
-
+            
             const useStreaming = (agentConfig?.streamOutput !== false);
             const modelConfigForVCP = {
                 model: agentConfig?.model || 'gemini-pro',
@@ -294,22 +258,22 @@ export function setupEventListeners(deps) {
                 ...(agentConfig?.contextTokenLimit && { contextTokenLimit: parseInt(agentConfig.contextTokenLimit) }),
                 stream: useStreaming
             };
-
+            
             if (useStreaming) {
                 if (window.messageRenderer) {
                     await new Promise(resolve => setTimeout(resolve, 500));
                     await window.messageRenderer.startStreamingMessage({ ...thinkingMessage, content: "" }, thinkingMessageItem);
                 }
             }
-
+            
             const context = {
                 agentId: currentSelectedItem.id,
                 agentName: currentSelectedItem.name || currentSelectedItem.id,
                 topicId: currentTopicId,
                 isGroupMessage: false
             };
-
-            const vcpResponse = await chatAPI.sendToVCP(
+            
+            const vcpResponse = await window.electronAPI.sendToVCP(
                 globalSettings.vcpServerUrl,
                 globalSettings.vcpApiKey,
                 messagesForVCP,
@@ -318,15 +282,15 @@ export function setupEventListeners(deps) {
                 false,
                 context
             );
-
+            
             if (!useStreaming) {
                 const { response, context } = vcpResponse;
                 const isForActiveChat = context && context.agentId === currentSelectedItem.id && context.topicId === currentTopicId;
-
+                
                 if (isForActiveChat) {
                     if (window.messageRenderer) window.messageRenderer.removeMessageById(thinkingMessage.id);
                 }
-
+                
                 if (response.error) {
                     if (isForActiveChat && window.messageRenderer) {
                         window.messageRenderer.renderMessage({ role: 'system', content: `VCP错误: ${response.error}`, timestamp: Date.now() });
@@ -343,13 +307,13 @@ export function setupEventListeners(deps) {
                         timestamp: Date.now(),
                         id: response.id || `regen_nonstream_${Date.now()}`
                     };
-
-                    const historyForSave = await chatAPI.getChatHistory(context.agentId, context.topicId);
+                    
+                    const historyForSave = await window.electronAPI.getChatHistory(context.agentId, context.topicId);
                     if (historyForSave && !historyForSave.error) {
                         const finalHistory = historyForSave.filter(msg => msg.id !== thinkingMessage.id && !msg.isThinking);
                         finalHistory.push(assistantMessage);
-                        await chatAPI.saveChatHistory(context.agentId, context.topicId, finalHistory);
-
+                        await window.electronAPI.saveChatHistory(context.agentId, context.topicId, finalHistory);
+                        
                         if (isForActiveChat) {
                             currentChatHistory.length = 0;
                             currentChatHistory.push(...finalHistory);
@@ -363,13 +327,13 @@ export function setupEventListeners(deps) {
                     console.error("[ContinueWriting] Streaming setup failed:", vcpResponse.errorDetail || vcpResponse.error);
                 }
             }
-
+            
         } catch (error) {
             console.error('[ContinueWriting] 续写时出错:', error);
             if (window.messageRenderer) window.messageRenderer.removeMessageById(thinkingMessage.id);
             if (window.messageRenderer) window.messageRenderer.renderMessage({ role: 'system', content: `错误: ${error.message}`, timestamp: Date.now() });
             if (currentSelectedItem.id && currentTopicId) {
-                await chatAPI.saveChatHistory(currentSelectedItem.id, currentTopicId, currentChatHistory.filter(msg => !msg.isThinking));
+                await window.electronAPI.saveChatHistory(currentSelectedItem.id, currentTopicId, currentChatHistory.filter(msg => !msg.isThinking));
             }
         }
     }
@@ -385,9 +349,9 @@ export function setupEventListeners(deps) {
                 console.log('[UI] Speaking avatar clicked. Requesting TTS stop via sovitsStop.');
                 event.preventDefault();
                 event.stopPropagation();
-                if (chatAPI?.sovitsStop) {
+                if (window.electronAPI && window.electronAPI.sovitsStop) {
                     // This sends the stop request to the main process
-                    chatAPI.sovitsStop();
+                    window.electronAPI.sovitsStop();
                 }
                 return;
             }
@@ -407,8 +371,8 @@ export function setupEventListeners(deps) {
                     return;
                 }
                 if (href.startsWith('http:') || href.startsWith('https:') || href.startsWith('file:') || href.startsWith('magnet:')) {
-                    if (chatAPI?.sendOpenExternalLink) {
-                        chatAPI.sendOpenExternalLink(href);
+                    if (window.electronAPI && window.electronAPI.sendOpenExternalLink) {
+                        window.electronAPI.sendOpenExternalLink(href);
                     } else {
                         console.warn('[Renderer] electronAPI.sendOpenExternalLink is not available.');
                     }
@@ -421,23 +385,7 @@ export function setupEventListeners(deps) {
         console.error('[Renderer] chatMessagesDiv not found during setupEventListeners.');
     }
 
-    sendMessageBtn.addEventListener('click', async () => {
-        if (typeof window.handleSendButtonAction === 'function' && sendMessageBtn?.dataset.mode === 'interrupt') {
-            await window.handleSendButtonAction();
-            return;
-        }
-        chatManager.handleSendMessage();
-    });
-
-    // 发送按钮右键 - 打开「高级回复」(VCPChatTarven) 浮窗
-    sendMessageBtn.addEventListener('contextmenu', (e) => {
-        e.preventDefault();
-        if (window.TavernManager && typeof window.TavernManager.togglePopover === 'function') {
-            window.TavernManager.togglePopover(sendMessageBtn);
-        } else {
-            console.warn('[EventListeners] TavernManager not available.');
-        }
-    });
+    sendMessageBtn.addEventListener('click', () => chatManager.handleSendMessage());
     messageInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
@@ -450,52 +398,54 @@ export function setupEventListeners(deps) {
         if (e.button === 1) { // 中键
             e.preventDefault();
             e.stopPropagation();
-
+            
             // 检查心流锁是否激活
             if (window.flowlockManager && window.flowlockManager.getState().isActive) {
                 uiHelperFunctions.showToastNotification('心流锁已启用，无法手动续写', 'warning');
                 return;
             }
-
+            
             const currentSelectedItem = refs.currentSelectedItem.get();
             const currentTopicId = refs.currentTopicId.get();
             if (!currentSelectedItem.id || !currentTopicId) {
                 uiHelperFunctions.showToastNotification('请先选择一个项目和话题', 'warning');
                 return;
             }
-
+            
             const currentInputText = messageInput.value.trim();
             await handleContinueWriting(currentInputText);
         }
     });
 
-
     // --- Voice Input Logic ---
     let isVoiceInputRecording = false;
     let voiceInsertionStart = 0;
     let lastInsertedVoiceText = '';
-    let lockedTextLength = 0;
-    let voiceLockTimer = null;
-    let lastRawText = '';
-    let lastManualInteractionTime = 0;
-    let interactionLockedLength = 0;
+    let lockedTextLength = 0; // 在当前识别 Session 中已逻辑落锁的文字长度
+    let voiceLockTimer = null; // 1秒逻辑落锁计时器
+    let lastRawText = ''; // 记录最后一次收到的原始全量文本
+    let lastManualInteractionTime = 0; // 记录最后一次手动交互的时间戳
+    let interactionLockedLength = 0; // 手动交互瞬间的识别文本长度偏移
 
-    if (voiceInputBtn && messageInput && chatAPI?.onSpeechRecognitionResult) {
-        chatAPI.onSpeechRecognitionResult((data) => {
+    if (voiceInputBtn && messageInput) {
+        // 监听语音识别结果 (分段流式协议)
+        window.electronAPI.onSpeechRecognitionResult((data) => {
             if (!isVoiceInputRecording) return;
 
             const { text, isFinal } = (typeof data === 'object' && data !== null) ? data : { text: data, isFinal: false };
-            const safeText = text || '';
-            lastRawText = safeText;
+            lastRawText = text || ''; // 更新全量文本记录
 
-            if (safeText.length < lockedTextLength) {
+            // 如果引擎重启了（text变短或为空），重置本地 Session 偏移量
+            if (text.length < lockedTextLength) {
                 lockedTextLength = 0;
                 interactionLockedLength = 0;
             }
-
-            const newSegmentText = safeText.substring(lockedTextLength);
+            
+            // 计算当前相对于“落锁点”的新增文字
+            const newSegmentText = text.substring(lockedTextLength);
             if (!newSegmentText && !isFinal) return;
 
+            // --- 逻辑落锁函数 ---
             const performLogicLock = () => {
                 if (lastInsertedVoiceText !== '') {
                     console.log(`[VoiceInput] 触发1秒逻辑落锁: "${lastInsertedVoiceText}"`);
@@ -505,26 +455,36 @@ export function setupEventListeners(deps) {
                 }
             };
 
+            // 只要有新结果，就重置 1 秒计时器
             if (voiceLockTimer) clearTimeout(voiceLockTimer);
 
+            // 如果当前没有正在处理的片段，说明是新起点，立即探测光标位置
             if (lastInsertedVoiceText === '') {
-                voiceInsertionStart = messageInput.selectionStart ?? messageInput.value.length;
+                voiceInsertionStart = messageInput.selectionStart;
                 console.log(`[VoiceInput] 识别到新段落，锚定光标位置: ${voiceInsertionStart}`);
             }
 
+            // 局部替换：只更新从 voiceInsertionStart 开始的未落锁片段
             const currentValue = messageInput.value;
             const beforeText = currentValue.substring(0, voiceInsertionStart);
             const afterText = currentValue.substring(voiceInsertionStart + lastInsertedVoiceText.length);
+            
             messageInput.value = beforeText + newSegmentText + afterText;
             lastInsertedVoiceText = newSegmentText;
 
+            // --- 智能光标防护套逻辑 ---
             const now = Date.now();
-            const isNewSpeech = safeText.length > interactionLockedLength;
+            // 判定：如果收到文本长度超过了手动干预时的长度，说明是“新产生的语音”，而非“迟到的尾音”
+            const isNewSpeech = text.length > interactionLockedLength;
             const isWithinShield = (now - lastManualInteractionTime < 600);
+            
             if (!isWithinShield || isNewSpeech) {
+                // 仅在保护期外，或者检测到新语音产生时，才允许同步光标
                 const tempCursorPos = voiceInsertionStart + newSegmentText.length;
                 messageInput.setSelectionRange(tempCursorPos, tempCursorPos);
+                
                 if (isNewSpeech && isWithinShield) {
+                    // 如果是在保护期内靠“新语音”冲破的防护，则立即解除保护期状态
                     lastManualInteractionTime = 0;
                     console.log('[VoiceInput] 检测到新语音，提前解除光标防护期');
                 }
@@ -538,7 +498,7 @@ export function setupEventListeners(deps) {
             } else {
                 voiceLockTimer = setTimeout(performLogicLock, 1000);
             }
-
+            
             uiHelperFunctions.autoResizeTextarea(messageInput);
             messageInput.focus();
         });
@@ -546,61 +506,70 @@ export function setupEventListeners(deps) {
         voiceInputBtn.addEventListener('click', async () => {
             const currentSelectedItem = refs.currentSelectedItem.get();
             if (!currentSelectedItem.id) {
-                uiHelperFunctions.showToastNotification('请先选择一个项目以使用语音输入。', 'warning');
+                uiHelperFunctions.showToastNotification("请先选择一个项目以使用语音输入。", 'warning');
                 return;
             }
 
             try {
                 if (isVoiceInputRecording) {
+                    // 手动停止录音
                     console.log('[VoiceInput] 手动停止录音');
-                    chatAPI.stopSpeechRecognition();
+                    window.electronAPI.stopSpeechRecognition();
                     voiceInputBtn.classList.remove('recording');
                     isVoiceInputRecording = false;
                     lastInsertedVoiceText = '';
-                    if (voiceLockTimer) clearTimeout(voiceLockTimer);
                 } else {
+                    // 开启语音录入
                     console.log('[VoiceInput] 开启语音录入');
                     if (messageInput.disabled) {
-                        uiHelperFunctions.showToastNotification('当前状态下无法输入。', 'warning');
+                        uiHelperFunctions.showToastNotification("当前状态下无法输入。", 'warning');
                         return;
                     }
-                    voiceInsertionStart = messageInput.selectionStart ?? messageInput.value.length;
+                    
+                    // 初始化锚点为当前光标位置
+                    voiceInsertionStart = messageInput.selectionStart;
                     lastInsertedVoiceText = '';
-                    lockedTextLength = 0;
-                    interactionLockedLength = 0;
-                    lastRawText = '';
+                    
                     voiceInputBtn.classList.add('recording');
                     isVoiceInputRecording = true;
-                    chatAPI.startSpeechRecognition();
-                    uiHelperFunctions.showToastNotification('语音输入已开启，停顿将自动落锁，支持随时编辑。', 'info');
+                    window.electronAPI.startSpeechRecognition();
+                    
+                    uiHelperFunctions.showToastNotification("语音输入已开启，停顿将自动落锁，支持随时编辑。", 'info');
                 }
             } catch (error) {
                 console.error('[VoiceInput] 语音输入操作失败:', error);
                 voiceInputBtn.classList.remove('recording');
                 isVoiceInputRecording = false;
                 lastInsertedVoiceText = '';
-                if (voiceLockTimer) clearTimeout(voiceLockTimer);
-                uiHelperFunctions.showToastNotification('语音输入启动失败，请检查麦克风权限。', 'error');
+                uiHelperFunctions.showToastNotification("语音输入启动失败，请检查麦克风权限。", 'error');
             }
         });
 
+        // --- 增强：手动交互即刻落锁与光标防护 ---
         const forceLockOnManualInteraction = () => {
-            lastManualInteractionTime = Date.now();
+            lastManualInteractionTime = Date.now(); // 激活 600ms 保护期
+            
             if (isVoiceInputRecording) {
+                // 同步当前的识别偏移量，确保迟到的尾音不会“瞬移”
                 if (lastRawText) {
                     lockedTextLength = lastRawText.length;
-                    interactionLockedLength = lastRawText.length;
+                    interactionLockedLength = lastRawText.length; // 记录断点，用于区分新老语音
                 }
+
                 if (lastInsertedVoiceText !== '') {
                     console.log('[VoiceInput] 监测到手动干预，执行强制落锁并开启光标保护');
                     if (voiceLockTimer) clearTimeout(voiceLockTimer);
+                    
                     voiceInsertionStart += lastInsertedVoiceText.length;
                     lastInsertedVoiceText = '';
                 }
             }
         };
 
+        // 监听点击：主人点哪，下一句就从哪开始
         messageInput.addEventListener('mousedown', forceLockOnManualInteraction);
+        
+        // 监听键盘：主人一旦开始打字，语音立即停止对该区域的控制
         messageInput.addEventListener('keydown', (e) => {
             if (!['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) {
                 forceLockOnManualInteraction();
@@ -615,7 +584,7 @@ export function setupEventListeners(deps) {
             uiHelperFunctions.showToastNotification("请先选择一个项目和话题以上传附件。", 'error');
             return;
         }
-        const result = await chatAPI.selectFilesToSend(currentSelectedItem.id, currentTopicId);
+        const result = await window.electronAPI.selectFilesToSend(currentSelectedItem.id, currentTopicId);
 
         if (result && result.success && result.attachments && result.attachments.length > 0) {
             result.attachments.forEach(att => {
@@ -638,117 +607,17 @@ export function setupEventListeners(deps) {
             uiHelperFunctions.showToastNotification(`选择文件时出错: ${result.error}`, 'error');
         }
     });
-
-
+    
+ 
     globalSettingsBtn.addEventListener('click', () => uiHelperFunctions.openModal('globalSettingsModal'));
+    globalSettingsForm.addEventListener('submit', (e) => handleSaveGlobalSettings(e, deps));
 
-    // 🟢 优化：监听模态框就绪事件，动态绑定内部元素的事件
-    document.addEventListener('modal-ready', (e) => {
-        const { modalId } = e.detail;
-        if (modalId === 'globalSettingsModal') {
-            const form = document.getElementById('globalSettingsForm');
-            if (form) form.addEventListener('submit', (ev) => handleSaveGlobalSettings(ev, deps));
-
-            const addPathBtn = document.getElementById('addNetworkPathBtn');
-            if (addPathBtn) addPathBtn.addEventListener('click', () => addNetworkPathInput());
-
-            const avatarInput = document.getElementById('userAvatarInput');
-            if (avatarInput) setupUserAvatarListener(avatarInput);
-
-            const resetBtn = document.getElementById('resetUserAvatarColorsBtn');
-            if (resetBtn) setupResetUserColorsListener(resetBtn);
-
-            const styleHeader = document.getElementById('userStyleCollapseHeader');
-            if (styleHeader) {
-                styleHeader.addEventListener('click', () => {
-                    const container = styleHeader.closest('.agent-style-collapsible-container');
-                    if (container) container.classList.toggle('collapsed');
-                });
-            }
-
-            // 绑定颜色选择器同步
-            setupColorSyncListeners();
-
-            // 绑定 Rust 助手配置相关的事件
-            setupRustAssistantConfigListeners();
-
-            // 绑定全局设置导航切换
-            setupGlobalSettingsNavigation();
-
-            // continueWritingPrompt 使用 CSS field-sizing: content 自动调整高度，无需 JS 处理
-        }
-    });
-
-    // 全局设置双栏导航切换
-    function setupGlobalSettingsNavigation() {
-        const navItems = document.querySelectorAll('.settings-nav-item');
-        const sections = document.querySelectorAll('.settings-section');
-        let isAnimating = false;
-
-        navItems.forEach(item => {
-            item.addEventListener('click', () => {
-                // 防止动画过程中重复点击
-                if (isAnimating) return;
-
-                const targetSection = item.dataset.section;
-                const currentActive = document.querySelector('.settings-section.active');
-
-                // 如果点击的是当前已激活的项，不执行任何操作
-                if (currentActive && currentActive.id === `section-${targetSection}`) {
-                    return;
-                }
-
-                isAnimating = true;
-
-                // 更新导航项激活状态
-                navItems.forEach(nav => nav.classList.remove('active'));
-                item.classList.add('active');
-
-                // 获取目标面板
-                const targetPanel = document.getElementById(`section-${targetSection}`);
-                if (!targetPanel) {
-                    isAnimating = false;
-                    return;
-                }
-
-                // 如果有当前激活的面板，先执行退出动画
-                if (currentActive) {
-                    currentActive.classList.add('switching-out');
-                    currentActive.classList.remove('active');
-
-                    // 等待退出动画完成后显示新面板
-                    setTimeout(() => {
-                        currentActive.style.display = 'none';
-                        currentActive.classList.remove('switching-out');
-
-                        // 显示新面板
-                        targetPanel.style.display = 'block';
-                        targetPanel.classList.add('switching-in');
-
-                        // 强制重排以触发动画
-                        void targetPanel.offsetWidth;
-
-                        targetPanel.classList.remove('switching-in');
-                        targetPanel.classList.add('active');
-                        isAnimating = false;
-                    }, 150);
-                } else {
-                    // 没有当前面板，直接显示新面板
-                    targetPanel.style.display = 'block';
-                    targetPanel.classList.add('switching-in');
-
-                    void targetPanel.offsetWidth;
-
-                    targetPanel.classList.remove('switching-in');
-                    targetPanel.classList.add('active');
-                    isAnimating = false;
-                }
-            });
-        });
+    if (addNetworkPathBtn) {
+        addNetworkPathBtn.addEventListener('click', () => addNetworkPathInput());
     }
 
-    function setupUserAvatarListener(input) {
-        input.addEventListener('change', (event) => {
+    if (userAvatarInput) {
+        userAvatarInput.addEventListener('change', (event) => {
             const file = event.target.files[0];
             if (file) {
                 uiHelperFunctions.openAvatarCropper(file, (croppedFile) => {
@@ -758,14 +627,15 @@ export function setupEventListeners(deps) {
                         const previewUrl = URL.createObjectURL(croppedFile);
                         userAvatarPreview.src = previewUrl;
                         userAvatarPreview.style.display = 'block';
-
+                        
+                        // 裁切完成后立即计算颜色并填充到输入框
                         if (window.getDominantAvatarColor) {
                             window.getDominantAvatarColor(previewUrl).then((avgColor) => {
                                 const userAvatarBorderColorInput = document.getElementById('userAvatarBorderColor');
                                 const userAvatarBorderColorTextInput = document.getElementById('userAvatarBorderColorText');
                                 const userNameTextColorInput = document.getElementById('userNameTextColor');
                                 const userNameTextColorTextInput = document.getElementById('userNameTextColorText');
-
+                                
                                 if (avgColor && userAvatarBorderColorInput && userNameTextColorInput) {
                                     const rgbMatch = avgColor.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
                                     if (rgbMatch) {
@@ -776,15 +646,19 @@ export function setupEventListeners(deps) {
                                             const hex = x.toString(16);
                                             return hex.length === 1 ? '0' + hex : hex;
                                         }).join('');
-
+                                        
                                         userAvatarBorderColorInput.value = hexColor;
                                         userAvatarBorderColorTextInput.value = hexColor;
                                         userNameTextColorInput.value = hexColor;
                                         userNameTextColorTextInput.value = hexColor;
                                         userAvatarPreview.style.borderColor = hexColor;
+                                        
+                                        console.log('[EventListeners] Auto-filled user colors from avatar:', hexColor);
                                     }
                                 }
-                            }).catch(err => console.error('[EventListeners] Error extracting user avatar color:', err));
+                            }).catch(err => {
+                                console.error('[EventListeners] Error extracting user avatar color:', err);
+                            });
                         }
                     }
                 }, 'user');
@@ -795,203 +669,7 @@ export function setupEventListeners(deps) {
             }
         });
     }
-
-    function setupResetUserColorsListener(btn) {
-        btn.addEventListener('click', () => {
-            const userAvatarPreview = document.getElementById('userAvatarPreview');
-            if (!userAvatarPreview || !userAvatarPreview.src || userAvatarPreview.src.includes('default_user_avatar.png')) {
-                uiHelperFunctions.showToastNotification('请先上传头像后再重置颜色', 'warning');
-                return;
-            }
-            if (window.getDominantAvatarColor) {
-                window.getDominantAvatarColor(userAvatarPreview.src).then((avgColor) => {
-                    const borderColorInput = document.getElementById('userAvatarBorderColor');
-                    const nameColorInput = document.getElementById('userNameTextColor');
-                    if (avgColor && borderColorInput && nameColorInput) {
-                        const rgbMatch = avgColor.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
-                        if (rgbMatch) {
-                            const r = parseInt(rgbMatch[1]), g = parseInt(rgbMatch[2]), b = parseInt(rgbMatch[3]);
-                            const hexColor = '#' + [r, g, b].map(x => x.toString(16).padStart(2, '0')).join('');
-                            borderColorInput.value = hexColor;
-                            document.getElementById('userAvatarBorderColorText').value = hexColor;
-                            nameColorInput.value = hexColor;
-                            document.getElementById('userNameTextColorText').value = hexColor;
-                            userAvatarPreview.style.borderColor = hexColor;
-                            uiHelperFunctions.showToastNotification('已重置为头像默认颜色', 'success');
-                        }
-                    }
-                });
-            }
-        });
-    }
-
-    function setupColorSyncListeners() {
-        const sync = (pickerId, textId, previewId) => {
-            const picker = document.getElementById(pickerId);
-            const text = document.getElementById(textId);
-            const preview = previewId ? document.getElementById(previewId) : null;
-            if (picker && text) {
-                picker.addEventListener('input', (e) => {
-                    text.value = e.target.value;
-                    if (preview) preview.style.borderColor = e.target.value;
-                });
-                text.addEventListener('input', (e) => {
-                    if (/^#[0-9A-F]{6}$/i.test(e.target.value)) {
-                        picker.value = e.target.value;
-                        if (preview) preview.style.borderColor = e.target.value;
-                    }
-                });
-            }
-        };
-        sync('userAvatarBorderColor', 'userAvatarBorderColorText', 'userAvatarPreview');
-        sync('userNameTextColor', 'userNameTextColorText');
-    }
-
-    // Rust助手配置UI交互处理
-    async function setupRustAssistantConfigListeners() {
-        // 首先加载当前的Rust配置并填充表单
-        await loadAndPopulateRustConfig();
-
-        // 启用Rust助手时，显示规则容器
-        const rustUseAssistantCheckbox = document.getElementById('rustUseAssistant');
-        const rustGuardRulesContainer = document.getElementById('rustGuardRulesContainer');
-
-        if (rustUseAssistantCheckbox && rustGuardRulesContainer) {
-            const toggleRustGuardRules = () => {
-                rustGuardRulesContainer.style.display = rustUseAssistantCheckbox.checked ? 'block' : 'none';
-            };
-            rustUseAssistantCheckbox.addEventListener('change', toggleRustGuardRules);
-            // 初始化时设置一次
-            toggleRustGuardRules();
-        }
-
-        // 启用自定义阈值时，显示阈值配置面板
-        const rustEnableCustomThresholdsCheckbox = document.getElementById('rustEnableCustomThresholds');
-        const rustCustomThresholdsPanel = document.getElementById('rustCustomThresholdsPanel');
-
-        if (rustEnableCustomThresholdsCheckbox && rustCustomThresholdsPanel) {
-            const toggleThresholdsPanel = () => {
-                rustCustomThresholdsPanel.style.display = rustEnableCustomThresholdsCheckbox.checked ? 'block' : 'none';
-            };
-            rustEnableCustomThresholdsCheckbox.addEventListener('change', toggleThresholdsPanel);
-            // 初始化时设置一次
-            toggleThresholdsPanel();
-        }
-
-        // 规则模式选择时，切换白名单/黑名单面板的显示
-        const rustRuleModeSelect = document.getElementById('rustRuleMode');
-        const rustWhitelistPanel = document.getElementById('rustWhitelistPanel');
-        const rustBlacklistPanel = document.getElementById('rustBlacklistPanel');
-
-        if (rustRuleModeSelect && rustWhitelistPanel && rustBlacklistPanel) {
-            const updateRulePanels = () => {
-                const mode = rustRuleModeSelect.value;
-                rustWhitelistPanel.style.display = mode === 'whitelist' ? 'block' : 'none';
-                rustBlacklistPanel.style.display = mode === 'blacklist' ? 'block' : 'none';
-            };
-            rustRuleModeSelect.addEventListener('change', updateRulePanels);
-            // 初始化时设置一次
-            updateRulePanels();
-        }
-    }
-
-    async function loadAndPopulateRustConfig() {
-        try {
-            if (!chatAPI) {
-                console.warn('[EventListeners] electronAPI not available, skipping rust config load');
-                return;
-            }
-
-            const result = await chatAPI.getRustAssistantConfig?.() || {};
-            if (result.error) {
-                console.warn('[EventListeners] Failed to load rust config:', result.error);
-                return;
-            }
-
-            // 填充基本开关
-            const rustUseAssistantCheckbox = document.getElementById('rustUseAssistant');
-            const rustDebugModeCheckbox = document.getElementById('rustDebugMode');
-
-            if (rustUseAssistantCheckbox) rustUseAssistantCheckbox.checked = result.useRustAssistant === true;
-            if (rustDebugModeCheckbox) rustDebugModeCheckbox.checked = result.debugMode === true;
-
-            // 填充自定义阈值
-            const hasCustomThresholds = result.runtimeThresholds &&
-                (result.runtimeThresholds.minEventIntervalMs !== 80 ||
-                    result.runtimeThresholds.minDistance !== 0 ||
-                    result.runtimeThresholds.screenshotSuspendMs !== 3000 ||
-                    result.runtimeThresholds.clipboardConflictSuspendMs !== 1000 ||
-                    result.runtimeThresholds.clipboardCheckIntervalMs !== 500);
-
-            const rustEnableCustomThresholdsCheckbox = document.getElementById('rustEnableCustomThresholds');
-            const rustCustomThresholdsPanel = document.getElementById('rustCustomThresholdsPanel');
-            
-            if (rustEnableCustomThresholdsCheckbox) {
-                rustEnableCustomThresholdsCheckbox.checked = hasCustomThresholds;
-            }
-            
-            // 根据开关状态更新面板显示
-            if (rustCustomThresholdsPanel) {
-                rustCustomThresholdsPanel.style.display = hasCustomThresholds ? 'block' : 'none';
-            }
-
-            if (result.runtimeThresholds) {
-                const minEventIntervalMs = document.getElementById('rustMinEventIntervalMs');
-                const minDistance = document.getElementById('rustMinDistance');
-                const screenshotSuspendMs = document.getElementById('rustScreenshotSuspendMs');
-                const clipboardConflictSuspendMs = document.getElementById('rustClipboardConflictSuspendMs');
-                const clipboardCheckIntervalMs = document.getElementById('rustClipboardCheckIntervalMs');
-
-                if (minEventIntervalMs) minEventIntervalMs.value = result.runtimeThresholds.minEventIntervalMs || 80;
-                if (minDistance) minDistance.value = result.runtimeThresholds.minDistance || 0;
-                if (screenshotSuspendMs) screenshotSuspendMs.value = result.runtimeThresholds.screenshotSuspendMs || 3000;
-                if (clipboardConflictSuspendMs) clipboardConflictSuspendMs.value = result.runtimeThresholds.clipboardConflictSuspendMs || 1000;
-                if (clipboardCheckIntervalMs) clipboardCheckIntervalMs.value = result.runtimeThresholds.clipboardCheckIntervalMs || 500;
-            }
-
-            // 填充规则选择
-            const rustRuleModeSelect = document.getElementById('rustRuleMode');
-            const rustWhitelistPanel = document.getElementById('rustWhitelistPanel');
-            const rustBlacklistPanel = document.getElementById('rustBlacklistPanel');
-            
-            let ruleMode = 'none';
-            if (result.whitelist && result.whitelist.length > 0) {
-                ruleMode = 'whitelist';
-            } else if (result.blacklist && result.blacklist.length > 0) {
-                ruleMode = 'blacklist';
-            }
-
-            if (rustRuleModeSelect) {
-                rustRuleModeSelect.value = ruleMode;
-            }
-
-            // 根据规则模式更新面板显示
-            if (rustWhitelistPanel && rustBlacklistPanel) {
-                rustWhitelistPanel.style.display = ruleMode === 'whitelist' ? 'block' : 'none';
-                rustBlacklistPanel.style.display = ruleMode === 'blacklist' ? 'block' : 'none';
-            }
-
-            // 填充白名单和黑名单
-            const rustWhitelistKeywords = document.getElementById('rustWhitelistKeywords');
-            const rustBlacklistKeywords = document.getElementById('rustBlacklistKeywords');
-            const rustScreenshotApps = document.getElementById('rustScreenshotApps');
-
-            if (rustWhitelistKeywords && result.whitelist && Array.isArray(result.whitelist)) {
-                rustWhitelistKeywords.value = result.whitelist.join('\n');
-            }
-            if (rustBlacklistKeywords && result.blacklist && Array.isArray(result.blacklist)) {
-                rustBlacklistKeywords.value = result.blacklist.join('\n');
-            }
-            if (rustScreenshotApps && result.screenshotApps && Array.isArray(result.screenshotApps)) {
-                rustScreenshotApps.value = result.screenshotApps.join('\n');
-            }
-
-            console.log('[EventListeners] Rust config loaded and form populated successfully');
-        } catch (error) {
-            console.error('[EventListeners] Error loading rust config:', error);
-        }
-    }
-
+    
     // 用户样式设置折叠功能
     const userStyleCollapseHeader = document.getElementById('userStyleCollapseHeader');
     if (userStyleCollapseHeader) {
@@ -1002,13 +680,13 @@ export function setupEventListeners(deps) {
             }
         });
     }
-
+    
     // 用户颜色选择器同步
     const userAvatarBorderColorInput = document.getElementById('userAvatarBorderColor');
     const userAvatarBorderColorTextInput = document.getElementById('userAvatarBorderColorText');
     const userNameTextColorInput = document.getElementById('userNameTextColor');
     const userNameTextColorTextInput = document.getElementById('userNameTextColorText');
-
+    
     if (userAvatarBorderColorInput && userAvatarBorderColorTextInput) {
         userAvatarBorderColorInput.addEventListener('input', (e) => {
             userAvatarBorderColorTextInput.value = e.target.value;
@@ -1017,7 +695,7 @@ export function setupEventListeners(deps) {
                 userAvatarPreview.style.borderColor = e.target.value;
             }
         });
-
+        
         userAvatarBorderColorTextInput.addEventListener('input', (e) => {
             const color = e.target.value.trim();
             if (/^#[0-9A-F]{6}$/i.test(color)) {
@@ -1028,7 +706,7 @@ export function setupEventListeners(deps) {
                 }
             }
         });
-
+        
         userAvatarBorderColorTextInput.addEventListener('blur', (e) => {
             const color = e.target.value.trim();
             if (!/^#[0-9A-F]{6}$/i.test(color)) {
@@ -1037,19 +715,19 @@ export function setupEventListeners(deps) {
             }
         });
     }
-
+    
     if (userNameTextColorInput && userNameTextColorTextInput) {
         userNameTextColorInput.addEventListener('input', (e) => {
             userNameTextColorTextInput.value = e.target.value;
         });
-
+        
         userNameTextColorTextInput.addEventListener('input', (e) => {
             const color = e.target.value.trim();
             if (/^#[0-9A-F]{6}$/i.test(color)) {
                 userNameTextColorInput.value = color;
             }
         });
-
+        
         userNameTextColorTextInput.addEventListener('blur', (e) => {
             const color = e.target.value.trim();
             if (!/^#[0-9A-F]{6}$/i.test(color)) {
@@ -1058,18 +736,18 @@ export function setupEventListeners(deps) {
             }
         });
     }
-
+    
     // 用户重置颜色按钮
     const resetUserAvatarColorsBtn = document.getElementById('resetUserAvatarColorsBtn');
     if (resetUserAvatarColorsBtn) {
         resetUserAvatarColorsBtn.addEventListener('click', () => {
             const userAvatarPreview = document.getElementById('userAvatarPreview');
-
+            
             if (!userAvatarPreview || !userAvatarPreview.src || userAvatarPreview.src === '#' || userAvatarPreview.src.includes('default_user_avatar.png')) {
                 uiHelperFunctions.showToastNotification('请先上传头像后再重置颜色', 'warning');
                 return;
             }
-
+            
             if (window.getDominantAvatarColor) {
                 window.getDominantAvatarColor(userAvatarPreview.src).then((avgColor) => {
                     if (avgColor && userAvatarBorderColorInput && userNameTextColorInput) {
@@ -1082,13 +760,13 @@ export function setupEventListeners(deps) {
                                 const hex = x.toString(16);
                                 return hex.length === 1 ? '0' + hex : hex;
                             }).join('');
-
+                            
                             userAvatarBorderColorInput.value = hexColor;
                             userAvatarBorderColorTextInput.value = hexColor;
                             userNameTextColorInput.value = hexColor;
                             userNameTextColorTextInput.value = hexColor;
                             userAvatarPreview.style.borderColor = hexColor;
-
+                            
                             uiHelperFunctions.showToastNotification('已重置为头像默认颜色', 'success');
                             console.log('[EventListeners] User colors reset to avatar default:', hexColor);
                         }
@@ -1106,22 +784,11 @@ export function setupEventListeners(deps) {
     }
 
     if (createNewAgentBtn) {
-        createNewAgentBtn.innerHTML = `
-            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <path d="M2 21a8 8 0 0 1 13.292-6"></path>
-                <circle cx="10" cy="8" r="5"></circle>
-                <path d="M19 16v6"></path>
-                <path d="M22 19h-6"></path>
-            </svg>
-            <span class="sidebar-button-label">
-                <span class="sidebar-button-prefix">&#21019;&#24314;</span>
-                <span class="sidebar-button-keyword">Agent</span>
-            </span>
-        `;
+        createNewAgentBtn.textContent = '创建 Agent';
         createNewAgentBtn.style.width = 'auto';
         createNewAgentBtn.addEventListener('click', async () => {
             const defaultAgentName = `新Agent_${Date.now()}`;
-            const result = await chatAPI.createAgent(defaultAgentName);
+            const result = await window.electronAPI.createAgent(defaultAgentName);
             if (result.success) {
                 await itemListManager.loadItems();
                 await chatManager.selectItem(result.agentId, 'agent', result.agentName, null, result.config);
@@ -1131,9 +798,9 @@ export function setupEventListeners(deps) {
             }
         });
     }
-
+    
     if (createNewGroupBtn) {
-        createNewGroupBtn.style.display = 'inline-flex';
+        createNewGroupBtn.style.display = 'inline-block';
     }
 
     currentItemActionBtn.addEventListener('click', async () => {
@@ -1148,12 +815,12 @@ export function setupEventListeners(deps) {
     // 【新建话题】按钮右键菜单 - 创建未锁定话题
     currentItemActionBtn.addEventListener('contextmenu', (e) => {
         e.preventDefault();
-
+        
         const currentSelectedItem = refs.currentSelectedItem.get();
         if (!currentSelectedItem.id || currentSelectedItem.type !== 'agent') {
             return; // 仅对 Agent 显示右键菜单
         }
-
+        
         showNewTopicButtonMenu(e, currentSelectedItem);
     });
 
@@ -1171,26 +838,25 @@ export function setupEventListeners(deps) {
         menu.style.top = `${event.clientY}px`;
         menu.style.left = `${event.clientX}px`;
 
-        // 点击外部关闭菜单
-        const closeMenu = (e) => {
-            if (!e || !menu.contains(e.target)) {
-                menu.remove();
-                document.removeEventListener('click', closeMenu, true);
-            }
-        };
-
         // 新建无锁话题选项
         const createUnlockedOption = document.createElement('div');
         createUnlockedOption.classList.add('context-menu-item');
         createUnlockedOption.innerHTML = `<i class="fas fa-unlock"></i> 新建无锁话题`;
         createUnlockedOption.onclick = async () => {
-            closeMenu();
+            menu.remove();
             await createNewTopicWithLockStatus(currentSelectedItem, false);
         };
         menu.appendChild(createUnlockedOption);
 
         document.body.appendChild(menu);
-
+        
+        // 点击外部关闭菜单
+        const closeMenu = (e) => {
+            if (!menu.contains(e.target)) {
+                menu.remove();
+                document.removeEventListener('click', closeMenu, true);
+            }
+        };
         setTimeout(() => {
             document.addEventListener('click', closeMenu, true);
         }, 0);
@@ -1205,20 +871,20 @@ export function setupEventListeners(deps) {
             uiHelperFunctions.showToastNotification("请先选择一个Agent。", 'error');
             return;
         }
-
+        
         const newTopicName = `新话题 ${new Date().toLocaleTimeString([], {
             hour: '2-digit', minute: '2-digit', second: '2-digit'
         })}`;
-
+        
         try {
             // 调用后端 API 创建话题，传入 locked 参数
-            const result = await chatAPI.createNewTopicForAgent(
+            const result = await window.electronAPI.createNewTopicForAgent(
                 currentSelectedItem.id,
                 newTopicName,
                 false, // isBranch
                 locked // 指定锁定状态
             );
-
+            
             if (result && result.success && result.topicId) {
                 // 使用 chatManager 的 selectTopic 方法来切换到新创建的话题
                 // 这会触发所有必要的状态更新、UI刷新和文件监听器启动
@@ -1230,7 +896,7 @@ export function setupEventListeners(deps) {
                 if (topicListManager && topicListManager.loadTopicList) {
                     await topicListManager.loadTopicList();
                 }
-
+                
                 uiHelperFunctions.showToastNotification(
                     locked ? '已创建新话题（已锁定）' : '已创建新话题（未锁定，AI可查看）',
                     'success'
@@ -1292,21 +958,21 @@ export function setupEventListeners(deps) {
                 const value = parseInt(e.target.value, 10);
                 if (value < 1000) {
                     e.target.value = 1000;
-                    uiHelperFunctions.showToastNotification('快捷环出现延迟不能小于1000ms，已自动调整', 'info');
+                    uiHelperFunctions.showToastNotification('九宫格出现延迟不能小于1000ms，已自动调整', 'info');
                 }
             });
             middleClickAdvancedDelayInput.addEventListener('blur', (e) => {
                 const value = parseInt(e.target.value, 10);
                 if (isNaN(value) || value < 1000) {
                     e.target.value = 1000;
-                    uiHelperFunctions.showToastNotification('快捷环出现延迟不能小于1000ms，已自动调整', 'info');
+                    uiHelperFunctions.showToastNotification('九宫格出现延迟不能小于1000ms，已自动调整', 'info');
                 }
             });
         }
 
         openForumBtn.addEventListener('click', async () => {
-            if (chatAPI?.openForumWindow) {
-                await chatAPI.openForumWindow();
+            if (window.electronAPI && window.electronAPI.openForumWindow) {
+                await window.electronAPI.openForumWindow();
             } else {
                 console.warn('[Renderer] electronAPI.openForumWindow is not available.');
                 uiHelperFunctions.showToastNotification('无法打开论坛：功能不可用。', 'error');
@@ -1316,8 +982,8 @@ export function setupEventListeners(deps) {
         // 右键点击 - 打开 VCPMemo 中心
         openForumBtn.addEventListener('contextmenu', async (e) => {
             e.preventDefault();
-            if (chatAPI?.openMemoWindow) {
-                await chatAPI.openMemoWindow();
+            if (window.electronAPI && window.electronAPI.openMemoWindow) {
+                await window.electronAPI.openMemoWindow();
             } else {
                 console.warn('[Renderer] electronAPI.openMemoWindow is not available.');
                 uiHelperFunctions.showToastNotification('无法打开 VCPMemo 中心：功能不可用。', 'error');
@@ -1327,8 +993,8 @@ export function setupEventListeners(deps) {
 
     if (openTranslatorBtn) {
         openTranslatorBtn.addEventListener('click', async () => {
-            if (chatAPI?.openTranslatorWindow) {
-                await chatAPI.openTranslatorWindow();
+            if (window.electronAPI && window.electronAPI.openTranslatorWindow) {
+                await window.electronAPI.openTranslatorWindow();
             } else {
                 console.warn('[Renderer] electronAPI.openTranslatorWindow is not available.');
                 uiHelperFunctions.showToastNotification('无法打开翻译助手：功能不可用。', 'error');
@@ -1338,8 +1004,8 @@ export function setupEventListeners(deps) {
 
     if (openNotesBtn) {
         openNotesBtn.addEventListener('click', async () => {
-            if (chatAPI?.openNotesWindow) {
-                await chatAPI.openNotesWindow();
+            if (window.electronAPI && window.electronAPI.openNotesWindow) {
+                await window.electronAPI.openNotesWindow();
             } else {
                 console.warn('[Renderer] electronAPI.openNotesWindow is not available.');
                 uiHelperFunctions.showToastNotification('无法打开笔记：功能不可用。', 'error');
@@ -1349,18 +1015,18 @@ export function setupEventListeners(deps) {
 
     if (openMusicBtn) {
         openMusicBtn.addEventListener('click', () => {
-            if (chatAPI?.openMusicWindow) {
-                chatAPI.openMusicWindow();
+            if (window.electron) {
+                window.electron.send('open-music-window');
             } else {
-                console.error('Music Player: electronAPI.openMusicWindow not found.');
+                console.error('Music Player: electron context bridge not found.');
             }
         });
     }
 
     if (openCanvasBtn) {
         openCanvasBtn.addEventListener('click', () => {
-            if (chatAPI?.openCanvasWindow) {
-                chatAPI.openCanvasWindow();
+            if (window.electronAPI && window.electronAPI.openCanvasWindow) {
+                window.electronAPI.openCanvasWindow();
             } else {
                 console.error('Canvas: electronAPI.openCanvasWindow not found.');
             }
@@ -1369,67 +1035,38 @@ export function setupEventListeners(deps) {
 
     if (toggleNotificationsBtn && notificationsSidebar) {
         toggleNotificationsBtn.addEventListener('click', () => {
-            chatAPI.sendToggleNotificationsSidebar();
+            window.electronAPI.sendToggleNotificationsSidebar();
         });
 
         toggleNotificationsBtn.addEventListener('contextmenu', (e) => {
             e.preventDefault();
-            if (chatAPI?.openRAGObserverWindow) {
-                chatAPI.openRAGObserverWindow();
+            if (window.electronAPI && window.electronAPI.openRAGObserverWindow) {
+                window.electronAPI.openRAGObserverWindow();
             } else {
                 console.error('electronAPI.openRAGObserverWindow is not defined!');
                 uiHelperFunctions.showToastNotification('功能缺失: preload.js需要更新。', 'error');
             }
         });
 
-        chatAPI.onDoToggleNotificationsSidebar(() => {
+        window.electronAPI.onDoToggleNotificationsSidebar(() => {
             const isActive = notificationsSidebar.classList.toggle('active');
             const mainContent = document.querySelector('.main-content');
             if (mainContent) {
                 mainContent.classList.toggle('notifications-sidebar-active', isActive);
             }
             if (isActive && refs.globalSettings.get().notificationsSidebarWidth) {
-                notificationsSidebar.style.width = `${refs.globalSettings.get().notificationsSidebarWidth}px`;
+                 notificationsSidebar.style.width = `${refs.globalSettings.get().notificationsSidebarWidth}px`;
             }
         });
     }
 
     if (toggleAssistantBtn) {
-        let longPressTimer;
-        let wasLongPress = false;
-        toggleAssistantBtn.addEventListener('mousedown', (e) => {
-            if (e.button !== 0) return; // Only left click
-            wasLongPress = false;
-            longPressTimer = setTimeout(() => {
-                console.log('[Assistant] Long press detected on toggle button');
-                chatAPI.assistantAction('open');
-                wasLongPress = true;
-                longPressTimer = null;
-            }, 600);
-        });
-
-        const clearLongPress = () => {
-            if (longPressTimer) {
-                clearTimeout(longPressTimer);
-                longPressTimer = null;
-            }
-        };
-
-        toggleAssistantBtn.addEventListener('mouseup', clearLongPress);
-        toggleAssistantBtn.addEventListener('mouseleave', clearLongPress);
-
         toggleAssistantBtn.addEventListener('click', async () => {
-            if (wasLongPress) {
-                wasLongPress = false;
-                return;
-            }
-            clearLongPress();
-
             const globalSettings = refs.globalSettings.get();
             const isActive = toggleAssistantBtn.classList.toggle('active');
             globalSettings.assistantEnabled = isActive;
-            chatAPI.toggleSelectionListener(isActive);
-            const result = await chatAPI.saveSettings({
+            window.electronAPI.toggleSelectionListener(isActive);
+            const result = await window.electronAPI.saveSettings({
                 ...globalSettings,
                 assistantEnabled: isActive
             });
@@ -1455,14 +1092,14 @@ export function setupEventListeners(deps) {
                 if (toggleSidebarBtn) {
                     toggleSidebarBtn.classList.toggle('active', isActive);
                 }
-
+                
                 // 保存侧边栏状态到设置
                 const globalSettings = refs.globalSettings.get();
                 globalSettings.sidebarActive = isActive;
-
+                
                 // 异步保存设置
-                if (chatAPI?.saveSettings) {
-                    chatAPI.saveSettings(globalSettings).then(result => {
+                if (window.electronAPI && window.electronAPI.saveSettings) {
+                    window.electronAPI.saveSettings(globalSettings).then(result => {
                         if (!result.success) {
                             console.error('保存侧边栏状态失败:', result.error);
                         }
@@ -1470,7 +1107,7 @@ export function setupEventListeners(deps) {
                         console.error('保存侧边栏状态时出错:', error);
                     });
                 }
-
+                
                 // 显示操作提示
                 // uiHelperFunctions.showToastNotification(`侧边栏已${isActive ? '显示' : '隐藏'}`, 'info');
             }
@@ -1494,7 +1131,7 @@ export function setupEventListeners(deps) {
 
             try {
                 console.log(`[VoiceChat] Opening voice chat for agent: ${currentSelectedItem.id}`);
-                await chatAPI.openVoiceChatWindow({
+                await window.electronAPI.openVoiceChatWindow({
                     agentId: currentSelectedItem.id
                 });
             } catch (error) {
@@ -1511,7 +1148,7 @@ export function setupEventListeners(deps) {
 
     if (minimizeToTrayBtn) {
         minimizeToTrayBtn.addEventListener('click', () => {
-            chatAPI.minimizeToTray();
+            window.electronAPI.minimizeToTray();
         });
     }
 
@@ -1539,13 +1176,13 @@ export function setupEventListeners(deps) {
 
         if ((e.ctrlKey || e.metaKey) && e.key === 'd') {
             e.preventDefault();
-
+            
             // 检查心流锁是否激活
             if (window.flowlockManager && window.flowlockManager.getState().isActive) {
                 uiHelperFunctions.showToastNotification('心流锁已启用，无法手动续写', 'warning');
                 return;
             }
-
+            
             if (!refs.currentSelectedItem.get().id || !refs.currentTopicId.get()) {
                 uiHelperFunctions.showToastNotification('请先选择一个项目和话题', 'warning');
                 return;
@@ -1556,18 +1193,18 @@ export function setupEventListeners(deps) {
 
         if ((e.ctrlKey || e.metaKey) && (e.key === 'n' || e.key === 'N')) {
             e.preventDefault();
-
+            
             const currentSelectedItem = refs.currentSelectedItem.get();
             if (!currentSelectedItem.id) {
                 uiHelperFunctions.showToastNotification('请先选择一个Agent', 'warning');
                 return;
             }
-
+            
             if (currentSelectedItem.type !== 'agent') {
                 uiHelperFunctions.showToastNotification('此快捷键仅适用于Agent，不适用于群组', 'warning');
                 return;
             }
-
+            
             // 检查是否按下 Shift 键
             if (e.shiftKey) {
                 // Ctrl/Command + Shift + N: 创建未上锁的话题
@@ -1586,8 +1223,8 @@ export function setupEventListeners(deps) {
     });
 
     // 监听来自主进程的全局快捷键触发的创建未锁定话题事件
-    if (chatAPI?.onCreateUnlockedTopic) {
-        chatAPI.onCreateUnlockedTopic(() => {
+    if (window.electronAPI && window.electronAPI.onCreateUnlockedTopic) {
+        window.electronAPI.onCreateUnlockedTopic(() => {
             console.log('[快捷键] 收到来自主进程的创建未锁定话题请求');
             const currentSelectedItem = refs.currentSelectedItem.get();
             if (!currentSelectedItem.id) {

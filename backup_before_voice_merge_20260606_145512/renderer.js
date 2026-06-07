@@ -75,7 +75,6 @@ const chatMessagesDiv = document.getElementById('chatMessages');
 const messageInput = document.getElementById('messageInput');
 const sendMessageBtn = document.getElementById('sendMessageBtn');
 const attachFileBtn = document.getElementById('attachFileBtn');
-const voiceInputBtn = document.getElementById('voiceInputBtn');
 const emoticonTriggerBtn = document.getElementById('emoticonTriggerBtn');
 const quickNewTopicBtn = document.getElementById('quickNewTopicBtn');
 const attachmentPreviewArea = document.getElementById('attachmentPreviewArea');
@@ -967,7 +966,6 @@ import { setupEventListeners } from './modules/event-listeners.js';
                 messageInput: messageInput,
                 sendMessageBtn: sendMessageBtn,
                 attachFileBtn: attachFileBtn,
-                voiceInputBtn: voiceInputBtn,
             },
             mainRendererFunctions: {
                 displaySettingsForItem: () => window.settingsManager.displaySettingsForItem(),
@@ -1099,7 +1097,7 @@ import { setupEventListeners } from './modules/event-listeners.js';
         }
 
         setupEventListeners({
-            chatMessagesDiv, voiceInputBtn, sendMessageBtn, messageInput, attachFileBtn, globalSettingsBtn,
+            chatMessagesDiv, sendMessageBtn, messageInput, attachFileBtn, globalSettingsBtn,
             globalSettingsForm, userAvatarInput, createNewAgentBtn, createNewGroupBtn,
             currentItemActionBtn, clearNotificationsBtn, openForumBtn, toggleNotificationsBtn,
             notificationsSidebar, agentSearchInput, minimizeToTrayBtn, leftSidebar,
