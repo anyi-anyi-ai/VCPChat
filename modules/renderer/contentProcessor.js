@@ -918,6 +918,62 @@ function showErrorNotification(message) {
     }, 3000);
 }
 
+function looksLikeSafeSingleDollarMath(content) {
+    const trimmedContent = (content || '').trim();
+    if (!trimmedContent) return false;
+
+    const hasExplicitMathSignal = /\\|[\^_=+\-*/<>]|[A-Za-z]\s*\(|\b(?:lim|sum|int|frac|sqrt|text|mathrm|mathbf|alpha|beta|gamma|theta|lambda|mu|sigma|pi|infty)\b/i.test(trimmedContent);
+    const isSimpleNumericMath = /^[+-]?(?:\d+(?:[.,]\d+)*|\.\d+)(?:\s*(?:%|\\%|‰|°))?$/.test(trimmedContent);
+
+    // 跳过价格、价格单位、Shell 变量、模板字符串与 Markdown 表格跨列误匹配。
+    // 但 `$1$`、`$20\%$`、`$2^n$`、`$1/2$` 这类明确闭合的行内数学应放行；
+    // 真正的价格通常是 `$123` 后接普通文本而不是闭合 `$`，不会走到这里。
+    // 否则 Markdown 解析后可能丢失反斜杠，导致后续 KaTeX 把相邻 `$...$` 错配成红色错误文本。
+    if (/^\d/.test(trimmedContent) && !hasExplicitMathSignal && !isSimpleNumericMath) return false;
+    if (trimmedContent.startsWith('/')) return false;
+    if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(trimmedContent)) return false;
+    if (trimmedContent.startsWith('{') && trimmedContent.endsWith('}')) return false;
+    if (trimmedContent.includes('|')) return false;
+
+    // 放行带有明确数学信号的单美元公式，以及 `$1$`、`$2$` 这类明确闭合的纯数字公式。
+    return hasExplicitMathSignal || isSimpleNumericMath;
+}
+
+function normalizeSafeSingleDollarMathInTextNodes(root) {
+    if (!root) return;
+
+    const walker = document.createTreeWalker(
+        root,
+        NodeFilter.SHOW_TEXT,
+        (node) => {
+            const parent = node.parentElement;
+            if (!parent) return NodeFilter.FILTER_REJECT;
+
+            if (parent.closest('pre, code, script, style, textarea, .katex')) {
+                return NodeFilter.FILTER_REJECT;
+            }
+
+            return node.nodeValue && node.nodeValue.includes('$')
+                ? NodeFilter.FILTER_ACCEPT
+                : NodeFilter.FILTER_REJECT;
+        },
+        false
+    );
+
+    const nodes = [];
+    let node;
+    while ((node = walker.nextNode())) {
+        nodes.push(node);
+    }
+
+    nodes.forEach((textNode) => {
+        textNode.nodeValue = textNode.nodeValue.replace(/(^|[^\w\\$])\$([^\$\n]{1,1200}?)\$(?![\w])/g, (match, prefix, content) => {
+            if (!looksLikeSafeSingleDollarMath(content)) return match;
+            return `${prefix}\\(${content.trim()}\\)`;
+        });
+    });
+}
+
 /**
  * Applies synchronous post-render processing to the message content.
  * This handles tasks like KaTeX, code highlighting, and button processing
@@ -927,13 +983,18 @@ function showErrorNotification(message) {
 function processRenderedContent(contentDiv, settings = {}) {
     if (!contentDiv) return;
 
+    normalizeSafeSingleDollarMathInTextNodes(contentDiv);
+
     // KaTeX rendering
     if (window.renderMathInElement) {
         window.renderMathInElement(contentDiv, {
             delimiters: [
-                {left: "$$", right: "$$", display: true}, {left: "$", right: "$", display: false},
-                {left: "\\(", right: "\\)", display: false}, {left: "\\[", right: "\\]", display: true}
+                {left: "$$", right: "$$", display: true},
+                {left: "$", right: "$", display: false},
+                {left: "\\(", right: "\\)", display: false},
+                {left: "\\[", right: "\\]", display: true}
             ],
+            ignoredTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code'],
             throwOnError: false
         });
     }
