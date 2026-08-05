@@ -528,30 +528,21 @@ body.light-theme .chat-actions .header-button:hover {
     transition: background-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.2s ease;
     padding: 0;
 }
-#sendMessageBtn svg, #attachFileBtn svg, #quickNewTopicBtn svg, #emoticonTriggerBtn svg {
+#sendMessageBtn svg, #attachFileBtn svg, #voiceInputBtn svg, #quickNewTopicBtn svg, #emoticonTriggerBtn svg {
     width: 24px;
     height: 24px;
-    stroke: var(--secondary-text);
-    color: var(--secondary-text);
+    stroke: currentColor;
+    color: currentColor;
 }
 
 #sendMessageBtn svg {
     fill: none;
 }
 
-body:not(.light-theme) #sendMessageBtn svg {
-    stroke: rgba(255, 255, 255, 0.92);
-    color: rgba(255, 255, 255, 0.92);
-}
-
 #attachFileBtn svg, #voiceInputBtn svg, #quickNewTopicBtn svg, #emoticonTriggerBtn svg {
     width: 16px;
     height: 16px;
     fill: none;
-}
-
-body.light-theme #sendMessageBtn svg, body.light-theme #attachFileBtn svg, body.light-theme #voiceInputBtn svg, body.light-theme #quickNewTopicBtn svg, body.light-theme #emoticonTriggerBtn svg {
-    stroke: #ffffff; 
 }
 
 body.light-theme #sendMessageBtn svg {
@@ -578,6 +569,7 @@ body.light-theme #attachFileBtn svg, body.light-theme #voiceInputBtn svg, body.l
     padding: 0;
     border-radius: 50%;
     background-color: var(--button-bg);
+    color: var(--text-on-accent);
     box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
     margin-left: auto;
 }
@@ -621,8 +613,8 @@ body.light-theme #attachFileBtn svg, body.light-theme #voiceInputBtn svg, body.l
 }
 
 #sendMessageBtn:disabled,
-#attachFileBtn:disabled,
 #voiceInputBtn:disabled,
+#attachFileBtn:disabled,
 #quickNewTopicBtn:disabled,
 #emoticonTriggerBtn:disabled {
     opacity: 0.55;
@@ -630,7 +622,6 @@ body.light-theme #attachFileBtn svg, body.light-theme #voiceInputBtn svg, body.l
     transform: none;
     box-shadow: none;
 }
-
 
 #voiceInputBtn.recording {
     background-color: var(--danger-color, #dc3545);
@@ -645,9 +636,6 @@ body.light-theme #attachFileBtn svg, body.light-theme #voiceInputBtn svg, body.l
 
 @keyframes voice-input-pulse {
     0% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.65); }
-    70% { box-shadow: 0 0 0 8px rgba(220, 53, 69, 0); }
-    100% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0); }
-}
 
 /* --- Modals --- */
 .modal {
