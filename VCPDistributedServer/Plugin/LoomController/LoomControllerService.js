@@ -46,6 +46,12 @@ function requireActionId(args) {
     return actionId;
 }
 
+function requireImageId(args) {
+    const imageId = firstNonEmptyString(args.imageId, args.image_id, args.target);
+    if (!imageId) throw new Error('[LoomController] 缺少必需参数 imageId。');
+    return imageId;
+}
+
 function parseObject(value, fieldName, fallback = {}) {
     if (value === undefined || value === null || value === '') return fallback;
     if (typeof value === 'object' && !Array.isArray(value)) return value;
@@ -152,6 +158,9 @@ function buildSerialActionArgs(command, stepArgs) {
 }
 
 function summarizeSerialStep(index, command, result) {
+    if (result.status === 'failed') {
+        return `- 步骤 ${index} · ${command}：失败 — ${result.error}`;
+    }
     if (result.type === 'wait') {
         return `- 步骤 ${index} · ${command}：已等待 ${result.waitMs} ms`;
     }
@@ -171,6 +180,7 @@ async function processSerialToolCall(rawArgs) {
     }
 
     const steps = [];
+    let failedStep = null;
     for (const entry of entries) {
         const stepArgs = extractSerialStepArgs(rawArgs, entry.index);
         const normalized = entry.command.toLowerCase();
@@ -182,6 +192,7 @@ async function processSerialToolCall(rawArgs) {
                     index: entry.index,
                     command: entry.command,
                     type: 'wait',
+                    status: 'success',
                     waitMs,
                 });
                 continue;
@@ -197,45 +208,66 @@ async function processSerialToolCall(rawArgs) {
                 index: entry.index,
                 command: entry.command,
                 type: 'command',
+                status: 'success',
                 output,
             });
         } catch (error) {
-            error.message = `[LoomController] 串行步骤 ${entry.index} (${entry.command}) 失败，后续步骤已停止：${error.message}`;
-            error.serialSteps = steps;
-            throw error;
+            failedStep = {
+                index: entry.index,
+                command: entry.command,
+                type: ['wait', 'sleep', 'delay'].includes(normalized) ? 'wait' : 'command',
+                status: 'failed',
+                error: error.message,
+            };
+            steps.push(failedStep);
+            break;
         }
     }
 
-    const lastPageInfoStep = [...steps].reverse().find((step) =>
-        step.output?.details?.command === 'GetPageInfo'
-        || step.output?.details?.actionId === 'page_get_info'
-    );
+    const completedSteps = steps.filter((step) => step.status === 'success');
     const content = [{
         type: 'text',
         text: [
-            '# LoomAPP 串行指令执行完成',
+            failedStep
+                ? '# LoomAPP 串行指令部分完成'
+                : '# LoomAPP 串行指令执行完成',
             '',
             ...steps.map((step) => summarizeSerialStep(step.index, step.command, step)),
-        ].join('\n'),
+            failedStep ? '' : null,
+            failedStep
+                ? `步骤 ${failedStep.index} 失败，后续步骤已停止；此前 ${completedSteps.length} 个步骤的回执保留如下。`
+                : null,
+        ].filter((line) => line !== null).join('\n'),
     }];
-    if (lastPageInfoStep?.output?.content?.[0]?.text) {
+
+    // 统一串行协议：保留失败前所有成功步骤的完整文本或多模态回执。
+    for (const step of completedSteps) {
+        if (!Array.isArray(step.output?.content)) continue;
         content.push({
             type: 'text',
-            text: lastPageInfoStep.output.content[0].text,
+            text: `## 步骤 ${step.index} · ${step.command} 回执`,
         });
+        content.push(...step.output.content);
     }
 
     return {
         content,
         details: {
             command: 'SerialExecute',
+            status: failedStep ? 'partial_failure' : 'success',
             count: steps.length,
+            requestedCount: entries.length,
+            completedCount: completedSteps.length,
+            stopped: Boolean(failedStep),
+            failedStep,
             appId: firstNonEmptyString(rawArgs.appId, rawArgs.app_id, rawArgs.id),
             steps: steps.map((step) => ({
                 index: step.index,
                 command: step.command,
                 type: step.type,
+                status: step.status,
                 waitMs: step.waitMs,
+                error: step.error,
                 details: step.output?.details || null,
             })),
         },
@@ -419,6 +451,72 @@ async function getPageInfo(args) {
     });
 }
 
+async function getPageImage(args) {
+    const appId = requireAppId(args);
+    const imageId = requireImageId(args);
+    const params = {
+        imageId,
+    };
+    for (const field of [
+        'format',
+        'imageFormat',
+        'quality',
+        'maxWidth',
+        'snapshotId',
+        'documentGeneration',
+        'runtimeInstanceId',
+    ]) {
+        if (args[field] !== undefined && args[field] !== null && args[field] !== '') {
+            params[field] = args[field];
+        }
+    }
+
+    const strict = optionalBoolean(args.strict, false);
+    if (args.strict !== undefined) params.strict = strict;
+    const execution = await requireManager().executeWebAgentAction(
+        appId,
+        'page_get_image',
+        params,
+        { strict }
+    );
+    const routed = execution.response?.result || {};
+    const image = routed.result || routed;
+    const dataUrl = firstNonEmptyString(image.dataUrl, image.url);
+    if (!dataUrl.startsWith('data:image/')) {
+        throw new Error('[LoomController] 页面图片动作未返回有效的 data:image Data URL。');
+    }
+
+    const summary = [
+        '# LoomAPP 页面图片已获取',
+        '',
+        `- App ID：${appId}`,
+        `- 图片 ID：${image.imageId || imageId}`,
+        image.resolvedImageId ? `- 严格图片 ID：${image.resolvedImageId}` : '',
+        image.kind ? `- 类型：${image.kind}` : '',
+        image.caption ? `- 说明：${image.caption}` : (image.alt ? `- 说明：${image.alt}` : ''),
+        image.outputSize
+            ? `- 输出尺寸：${image.outputSize.width}×${image.outputSize.height}`
+            : '',
+        image.format ? `- 格式：${image.format}` : '',
+        image.byteLength ? `- 字节数：${image.byteLength}` : '',
+    ].filter(Boolean).join('\n');
+    const { dataUrl: _dataUrl, url: _url, ...imageMetadata } = image;
+    return {
+        content: [
+            { type: 'text', text: summary },
+            { type: 'image_url', image_url: { url: dataUrl } },
+        ],
+        details: {
+            command: 'GetPageImage',
+            appId,
+            actionId: execution.actionId,
+            executedAt: execution.executedAt,
+            responseCode: execution.response?.code,
+            image: imageMetadata,
+        },
+    };
+}
+
 async function executeAction(args) {
     const appId = requireAppId(args);
     const actionId = requireActionId(args);
@@ -519,13 +617,17 @@ async function processToolCall(rawArgs = {}) {
             return getRenderedText(rawArgs);
         case 'getpageinfo':
             return getPageInfo(rawArgs);
+        case 'getpageimage':
+        case 'get_page_image':
+        case 'page_get_image':
+            return getPageImage(rawArgs);
         case 'executeaction':
             return executeAction(rawArgs);
         case 'editappsources':
             return editAppSources(rawArgs);
         default:
             throw new Error(
-                '[LoomController] 不支持的 command。可用值：ListApps、ListOpenApps、CreateApp、OpenApp、CloseApp、GetAppSources、GetRuntimeSource、GetRenderedText、GetPageInfo、ExecuteAction、EditAppSources。'
+                '[LoomController] 不支持的 command。可用值：ListApps、ListOpenApps、CreateApp、OpenApp、CloseApp、GetAppSources、GetRuntimeSource、GetRenderedText、GetPageInfo、GetPageImage、ExecuteAction、EditAppSources。'
             );
     }
 }
@@ -543,6 +645,7 @@ module.exports = {
     _test: {
         normalizeCommand,
         requireActionId,
+        requireImageId,
         parseObject,
         parseWaitMs,
         getSerialCommandEntries,
