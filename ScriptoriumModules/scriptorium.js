@@ -5,6 +5,10 @@
     const core = window.VDocCore;
     const styleLibrary = window.VDocStyleLibrary;
     const pagination = window.VDocPagination;
+    const asyncModule = window.ScriptoriumAsync;
+    const runtimeModule = window.ScriptoriumRuntime;
+    const sourceEditorModule = window.ScriptoriumSourceEditor;
+    const sessionModule = window.ScriptoriumSession;
     const state = {
         document: null,
         currentPath: null,
@@ -26,9 +30,21 @@
         agentCheckpointDisposer: null,
         unsavedResolver: null,
         renderUpdateTimer: null,
+        editBurstDirty: false,
         sourceEditorTimer: null,
         metricsTimer: null,
         paginationTimer: null,
+        pendingRenderedNodes: new Map(),
+        pendingRenderedAttributes: new Map(),
+        renderedTextBlocks: [],
+        pointerSelectionFrame: null,
+        pendingPointerSelectionId: null,
+        renderSurfaceAbortController: null,
+        compositionEnterTarget: null,
+        compositionEnterFrame: null,
+        formattingSyncFrame: null,
+        pendingFormattingTarget: null,
+        fontOptionLookup: new WeakMap(),
         documentRevision: 0,
         documentGeneration: 0,
         agentApi: null,
@@ -63,8 +79,39 @@
         checkpointSaveQueue: Promise.resolve(),
     };
 
+    const asyncCoordinator = asyncModule?.createCoordinator({
+        getGeneration: () => state.documentGeneration,
+        getDocumentId: () => state.document?.manifest?.id || null,
+        getRevision: () => state.documentRevision,
+    });
     const elements = {};
     const $ = (id) => document.getElementById(id);
+    const sourceEditorController = sourceEditorModule?.createSourceEditorController({
+        state,
+        elements,
+        core,
+        getCurrentHtml: currentSourceHtml,
+        getCurrentCss: currentSourceCss,
+    });
+    const sessionController = sessionModule?.createSessionController({
+        state,
+        elements,
+        api,
+        core,
+        styleLibrary,
+        asyncCoordinator,
+        isSlideDeck,
+        finalizeEditBurst,
+        applySourceChanges,
+        renderDocument,
+        switchMode,
+        captureSnapshot,
+        markDirty,
+        markSaved,
+        updateIdentity,
+        renderLineage,
+        showToast,
+    });
 
     function cacheElements() {
         [
@@ -162,19 +209,26 @@
         elements['export-pdf-btn'].disabled = !state.ready || state.saving;
         elements['create-checkpoint-btn'].disabled = !state.ready || state.saving;
     }
-
-    function markDirty() {
+    function markDirty(options = {}) {
         if (!state.ready || state.loading) return;
         state.dirty = true;
-        state.documentRevision += 1;
-        state.previewRevision = -1;
-        state.previewResult = null;
-        updateIdentity();
-        scheduleMetrics();
+        // 高频编辑期间只建立一次修订脏标记。两秒凝固提交后，
+        // 下一轮输入才创建新的 revision，避免每个按键触发状态与统计工作。
+        if (!options.coalesce || !state.editBurstDirty) {
+            state.documentRevision += 1;
+            state.previewRevision = -1;
+            state.previewResult = null;
+            updateIdentity();
+            // 连续编辑的统计、大纲和历史统一由两秒凝固提交处理。
+            // 非队列事务仍可在这里安排统计刷新。
+            if (!options.coalesce) scheduleMetrics();
+        }
+        if (options.coalesce) state.editBurstDirty = true;
     }
 
     function markSaved() {
         state.dirty = false;
+        state.editBurstDirty = false;
         updateIdentity();
     }
 
@@ -187,16 +241,14 @@
             scene: documentModel.manifest?.scene
                 ? JSON.parse(JSON.stringify(documentModel.manifest.scene))
                 : null,
-            html: deck ? '' : String(documentModel.source?.html || ''),
-            css: String(documentModel.source?.css || ''),
+            source: deck ? '' : String(documentModel.source?.content || ''),
+            deckCss: deck ? String(documentModel.source?.deckCss || '') : '',
             slides: deck
                 ? (documentModel.source?.slides || []).map((slide, index) => ({
                     index,
                     id: slide.id,
                     name: slide.name,
-                    html: String(slide.html || ''),
-                    css: String(slide.css || ''),
-                    script: String(slide.script || ''),
+                    source: String(slide.source || ''),
                     transition: slide.transition ?? null,
                     duration: slide.duration ?? null,
                     notes: String(slide.notes || ''),
@@ -263,6 +315,7 @@
 
     function captureSnapshot() {
         if (!state.document) return;
+        flushPendingRenderedEdits();
         const snapshot = core.serialize(state.document);
         if (state.history[state.historyIndex] === snapshot) return;
         state.history = state.history.slice(0, state.historyIndex + 1);
@@ -289,6 +342,7 @@
     }
 
     function restoreHistory(offset) {
+        finalizeEditBurst();
         const nextIndex = state.historyIndex + offset;
         if (nextIndex < 0 || nextIndex >= state.history.length) return false;
         const viewport = captureRenderViewport();
@@ -317,34 +371,66 @@
         return slides[state.activeSlideIndex] || slides[0] || null;
     }
 
-    function currentSourceHtml() {
-        return isSlideDeck() ? activeSlide()?.html || '' : state.document?.source?.html || '';
+    function parsedSlide(slide = activeSlide()) {
+        if (!slide) return { html: '', css: '', script: '' };
+        return {
+            ...core.splitSlideSource(slide.source),
+            id: slide.id,
+            name: slide.name,
+        };
     }
 
-    function setCurrentSourceHtml(html) {
+    function parsedDocument() {
+        const source = String(state.document?.source?.content || '');
+        const template = document.createElement('template');
+        template.innerHTML = source;
+        const styles = [...template.content.querySelectorAll('style')]
+            .map((style) => style.textContent || '');
+        template.content.querySelectorAll('style').forEach((style) => style.remove());
+        return {
+            html: template.innerHTML,
+            css: core.sanitizeCss(styles.join('\n\n')),
+        };
+    }
+
+    function currentSourceHtml() {
+        return isSlideDeck()
+            ? String(activeSlide()?.source || '')
+            : String(state.document?.source?.content || '');
+    }
+
+    function setCurrentSourceHtml(source) {
         if (isSlideDeck()) {
             const slide = activeSlide();
-            if (slide) slide.html = core.formatHtml(core.ensureTextNodeIds(html));
+            if (slide) slide.source = core.normalizeCompleteSlideSource(source);
         } else {
-            state.document.source.html = core.formatHtml(core.ensureTextNodeIds(html));
+            state.document.source.content = String(source || '');
         }
     }
 
     function currentSourceCss() {
-        return isSlideDeck() ? activeSlide()?.css || '' : state.document?.source?.css || '';
+        return isSlideDeck()
+            ? state.document?.source?.deckCss || ''
+            : parsedDocument().css;
     }
 
     function setCurrentSourceCss(css) {
         if (isSlideDeck()) {
-            const slide = activeSlide();
-            if (slide) slide.css = core.sanitizeCss(css);
-        } else {
-            state.document.source.css = core.sanitizeCss(css);
+            state.document.source.deckCss = core.sanitizeCss(css);
+            return;
         }
+        const documentSource = parsedDocument();
+        state.document.source.content = `<style data-vdoc-document-style>
+${core.sanitizeCss(css)}
+</style>
+${core.formatHtml(core.ensureTextNodeIds(documentSource.html))}`;
     }
 
     function documentCssForShadow() {
-        return state.document.source.css
+        const css = isSlideDeck()
+            ? state.document.source.deckCss
+            : parsedDocument().css;
+        return String(css || '')
             .replace(/(^|})\s*:root\s*\{/g, '$1\n:host {')
             .replace(/(^|})\s*html\s*,\s*body\s*\{/g, '$1\n:host {')
             .replace(/(^|})\s*body\s*\{/g, '$1\n:host {');
@@ -482,6 +568,37 @@
 }
 ${styleLibrary.compileCss([...state.usedAdvancedStyleIds])}
 ${documentCssForShadow()}
+
+/*
+ * 分页框架边界必须位于文档自定义 CSS 之后。统一源码允许作者定义通用的
+ * section、div、* 盒模型规则，但这些规则不能改变分页器自身的测量容器。
+ * page-content 使用 border-box 后，其 100% 宽高才包含纸张内边距，不会
+ * 向右、向下越出纸页并欺骗 scrollHeight/clientHeight 溢出判断。
+ */
+.vdoc-paged-runtime {
+    display: flow-root !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+}
+.vdoc-paged-runtime > .vdoc-page {
+    display: block !important;
+    box-sizing: border-box !important;
+    flex: none !important;
+    max-width: none !important;
+}
+.vdoc-paged-runtime > .vdoc-page > .vdoc-page-content {
+    display: block !important;
+    box-sizing: border-box !important;
+    width: 100% !important;
+    height: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+}
+.vdoc-paged-runtime > .vdoc-page > .vdoc-page-content * {
+    max-width: 100%;
+    overflow-wrap: break-word;
+}
 ${surface === 'edit' ? `
 .vdoc-page { display: none !important; }
 ` : ''}`;
@@ -509,517 +626,29 @@ ${surface === 'edit' ? `
         }
     }
 
-    function disposeSlideRuntime() {
-        try {
-            state.slideRuntimeDisposer?.();
-        } catch (error) {
-            console.error('[Scriptorium] Slide runtime cleanup failed:', error);
-        }
-        state.slideRuntimeDisposer = null;
-        state.slideRuntimeIdentity = null;
-    }
+    const runtimeController = runtimeModule.createRuntimeController({
+        state,
+        parsedSlide,
+        isSlideDeck,
+        activeSlide,
+        getRenderRoot,
+        getReadRoot,
+    });
 
-    function createScopedDocument(runtimeRoot) {
-        return new Proxy(document, {
-            get(target, property) {
-                if (property === 'querySelector') {
-                    return (selector) =>
-                        runtimeRoot.querySelector(selector) || target.querySelector(selector);
-                }
-                if (property === 'querySelectorAll') {
-                    return (selector) => runtimeRoot.querySelectorAll(selector);
-                }
-                if (property === 'getElementById') {
-                    return (id) =>
-                        runtimeRoot.querySelector(`#${CSS.escape(String(id))}`)
-                        || target.getElementById(id);
-                }
-                const value = Reflect.get(target, property, target);
-                return typeof value === 'function' ? value.bind(target) : value;
-            },
-        });
+    function disposeSlideRuntime() {
+        return runtimeController.dispose();
     }
 
     function recordProgrammableDiagnostics(diagnostics = []) {
-        state.programmableContentDiagnostics = diagnostics.map((item) => ({
-            ...item,
-            createdAt: Date.now(),
-        }));
-        diagnostics.forEach((item) => {
-            const log = item.level === 'refuse' ? console.error : console.warn;
-            log('[Scriptorium Programmable Content]', item);
-        });
-    }
-
-    function reviewRuntimeScript(source, context = {}) {
-        const policy = window.ScriptoriumProgrammableContent;
-        if (!policy) {
-            return {
-                allowed: false,
-                level: 'refuse',
-                findings: [{
-                    level: 'refuse',
-                    ruleId: 'review-engine-unavailable',
-                    message: '可编程内容审查器未加载，拒绝执行脚本。',
-                }],
-                context,
-            };
-        }
-        return policy.reviewJavaScript(source, context);
-    }
-
-    function diagnosticsFromReview(review, extra = {}) {
-        return review.findings.map((finding) => ({
-            ...finding,
-            ...extra,
-            context: review.context,
-        }));
-    }
-
-    function runSlideRuntime(slide, runtimeRoot, surface = 'edit') {
-        if (!slide?.script || !runtimeRoot?.isConnected) {
-            disposeSlideRuntime();
-            return null;
-        }
-
-        const identity = {
-            slideId: slide.id,
-            surface,
-            root: runtimeRoot,
-        };
-        const currentIdentity = state.slideRuntimeIdentity;
-        if (
-            currentIdentity
-            && currentIdentity.slideId === identity.slideId
-            && currentIdentity.surface === identity.surface
-            && currentIdentity.root === identity.root
-            && runtimeRoot.isConnected
-        ) {
-            return currentIdentity.runtime || null;
-        }
-
-        disposeSlideRuntime();
-
-        // AI 页面脚本常用 data-bound 防止重复绑定。它属于运行时状态，
-        // 不应阻止新建渲染树重新启动，也不应被持久化回 VPPTX。
-        if (runtimeRoot.hasAttribute?.('data-bound')) {
-            runtimeRoot.removeAttribute('data-bound');
-        }
-        runtimeRoot.querySelectorAll?.('[data-bound]').forEach((element) => {
-            element.removeAttribute('data-bound');
-        });
-
-        const animationFrames = new Set();
-        const timeouts = new Set();
-        const review = reviewRuntimeScript(slide.script, {
-            documentKind: 'pptx',
-            surface,
-            scriptId: slide.id,
-        });
-        recordProgrammableDiagnostics(diagnosticsFromReview(review, {
-            scriptId: slide.id,
-            documentKind: 'pptx',
-            surface,
-        }));
-        if (!review.allowed) {
-            runtimeRoot.dataset.vdocScriptRefused = 'true';
-            return null;
-        }
-        runtimeRoot.removeAttribute('data-vdoc-script-refused');
-
-        const intervals = new Set();
-        const cleanups = [];
-        let disposed = false;
-
-        const trackedRequestAnimationFrame = (callback) => {
-            if (disposed) return 0;
-            const id = window.requestAnimationFrame((timestamp) => {
-                animationFrames.delete(id);
-                if (!disposed) callback(timestamp);
-            });
-            animationFrames.add(id);
-            return id;
-        };
-        const trackedCancelAnimationFrame = (id) => {
-            animationFrames.delete(id);
-            window.cancelAnimationFrame(id);
-        };
-        const trackedSetTimeout = (callback, wait, ...args) => {
-            if (disposed) return 0;
-            const id = window.setTimeout(() => {
-                timeouts.delete(id);
-                if (!disposed) callback(...args);
-            }, wait);
-            timeouts.add(id);
-            return id;
-        };
-        const trackedClearTimeout = (id) => {
-            timeouts.delete(id);
-            window.clearTimeout(id);
-        };
-        const trackedSetInterval = (callback, wait, ...args) => {
-            if (disposed) return 0;
-            const id = window.setInterval(() => {
-                if (!disposed) callback(...args);
-            }, wait);
-            intervals.add(id);
-            return id;
-        };
-        const trackedClearInterval = (id) => {
-            intervals.delete(id);
-            window.clearInterval(id);
-        };
-        const runtime = Object.freeze({
-            surface,
-            root: runtimeRoot,
-            slideId: slide.id,
-            addCleanup(callback) {
-                if (typeof callback === 'function') cleanups.push(callback);
-                return callback;
-            },
-            requestAnimationFrame: trackedRequestAnimationFrame,
-            cancelAnimationFrame: trackedCancelAnimationFrame,
-            setTimeout: trackedSetTimeout,
-            clearTimeout: trackedClearTimeout,
-            setInterval: trackedSetInterval,
-            clearInterval: trackedClearInterval,
-        });
-
-        try {
-            const execute = new Function(
-                'scene',
-                'deck',
-                'runtime',
-                'document',
-                'requestAnimationFrame',
-                'cancelAnimationFrame',
-                'setTimeout',
-                'clearTimeout',
-                'setInterval',
-                'clearInterval',
-                String(slide.script)
-            );
-            const returned = execute.call(
-                runtimeRoot,
-                runtimeRoot,
-                window.VCPDeck || null,
-                runtime,
-                createScopedDocument(runtimeRoot),
-                trackedRequestAnimationFrame,
-                trackedCancelAnimationFrame,
-                trackedSetTimeout,
-                trackedClearTimeout,
-                trackedSetInterval,
-                trackedClearInterval
-            );
-            if (typeof returned === 'function') cleanups.push(returned);
-            else if (returned && typeof returned.dispose === 'function') {
-                cleanups.push(() => returned.dispose());
-            }
-        } catch (error) {
-            console.error(`[Scriptorium] Slide ${slide.id} runtime failed:`, error);
-        }
-
-        state.slideRuntimeDisposer = () => {
-            if (disposed) return;
-            disposed = true;
-            animationFrames.forEach((id) => window.cancelAnimationFrame(id));
-            timeouts.forEach((id) => window.clearTimeout(id));
-            intervals.forEach((id) => window.clearInterval(id));
-            animationFrames.clear();
-            timeouts.clear();
-            intervals.clear();
-            [...cleanups].reverse().forEach((cleanup) => {
-                try {
-                    cleanup();
-                } catch (error) {
-                    console.error('[Scriptorium] Slide custom cleanup failed:', error);
-                }
-            });
-        };
-        state.slideRuntimeIdentity = {
-            ...identity,
-            runtime,
-        };
-        return runtime;
-    }
-
-    function runDocumentRuntime(runtimeRoot, surface = 'edit') {
-        disposeSlideRuntime();
-        if (!runtimeRoot?.isConnected) return null;
-
-        const policy = window.ScriptoriumProgrammableContent;
-        const scriptElements = [...runtimeRoot.querySelectorAll('script')];
-        if (!scriptElements.length) {
-            recordProgrammableDiagnostics([]);
-            return null;
-        }
-
-        const animationFrames = new Set();
-        const timeouts = new Set();
-        const intervals = new Set();
-        const cleanups = [];
-        const diagnostics = [];
-        let disposed = false;
-
-        const trackedRequestAnimationFrame = (callback) => {
-            if (disposed) return 0;
-            const id = window.requestAnimationFrame((timestamp) => {
-                animationFrames.delete(id);
-                if (!disposed) callback(timestamp);
-            });
-            animationFrames.add(id);
-            return id;
-        };
-        const trackedCancelAnimationFrame = (id) => {
-            animationFrames.delete(id);
-            window.cancelAnimationFrame(id);
-        };
-        const trackedSetTimeout = (callback, wait, ...args) => {
-            if (disposed) return 0;
-            const id = window.setTimeout(() => {
-                timeouts.delete(id);
-                if (!disposed) callback(...args);
-            }, wait);
-            timeouts.add(id);
-            return id;
-        };
-        const trackedClearTimeout = (id) => {
-            timeouts.delete(id);
-            window.clearTimeout(id);
-        };
-        const trackedSetInterval = (callback, wait, ...args) => {
-            if (disposed) return 0;
-            const id = window.setInterval(() => {
-                if (!disposed) callback(...args);
-            }, wait);
-            intervals.add(id);
-            return id;
-        };
-        const trackedClearInterval = (id) => {
-            intervals.delete(id);
-            window.clearInterval(id);
-        };
-
-        scriptElements.forEach((scriptElement, index) => {
-            const scriptId = scriptElement.id
-                || scriptElement.dataset.vdocScript
-                || `document-island-${index + 1}`;
-            const island = scriptElement.closest(
-                '[data-vdoc-interactive], [data-vdoc-component], section, article, figure, div'
-            ) || runtimeRoot;
-
-            if (scriptElement.dataset.vdocLibrary) {
-                diagnostics.push({
-                    level: 'info',
-                    ruleId: 'local-library',
-                    message: `${scriptElement.dataset.vdocLibrary} 使用 Scriptorium 内置本地依赖。`,
-                    scriptId,
-                    library: scriptElement.dataset.vdocLibrary,
-                    documentKind: 'docx',
-                    surface,
-                });
-                return;
-            }
-
-            if (
-                scriptElement.dataset.vdocIgnoredSrc
-                || scriptElement.type === 'application/x-vdoc-ignored-external'
-            ) {
-                diagnostics.push({
-                    level: 'warn',
-                    ruleId: 'external-script-ignored',
-                    message: `未允许的外部脚本保持忽略：${
-                        scriptElement.dataset.vdocIgnoredSrc || '未知来源'
-                    }`,
-                    scriptId,
-                    source: scriptElement.dataset.vdocIgnoredSrc || '',
-                    documentKind: 'docx',
-                    surface,
-                });
-                return;
-            }
-
-            if (scriptElement.src || scriptElement.getAttribute('src')) {
-                const dependency = policy?.dependencyForUrl(
-                    scriptElement.getAttribute('src')
-                ) || {
-                    action: 'ignore',
-                    level: 'refuse',
-                    message: '依赖审查器不可用，外部脚本已拒绝。',
-                };
-                if (dependency.level === 'warn' || dependency.level === 'refuse') {
-                    diagnostics.push({
-                        level: dependency.level,
-                        ruleId: dependency.code || 'external-script',
-                        message: dependency.message,
-                        scriptId,
-                        documentKind: 'docx',
-                        surface,
-                    });
-                } else {
-                    diagnostics.push({
-                        level: 'info',
-                        ruleId: 'local-library-redirect',
-                        message: dependency.message,
-                        scriptId,
-                        library: dependency.library,
-                        source: dependency.source,
-                        localUrl: dependency.localUrl,
-                        documentKind: 'docx',
-                        surface,
-                    });
-                }
-                // 外链标签作为文档源码与导出依赖声明保留。通过 innerHTML
-                // 插入的 script 不会自动执行，因此未允许的外链不会在编辑器加载。
-                scriptElement.dataset.vdocDependencyAction = dependency.action;
-                if (dependency.library) {
-                    scriptElement.dataset.vdocLocalLibrary = dependency.library;
-                }
-                return;
-            }
-
-            const source = scriptElement.textContent || '';
-            const review = reviewRuntimeScript(source, {
-                documentKind: 'docx',
-                surface,
-                scriptId,
-            });
-            diagnostics.push(...diagnosticsFromReview(review, {
-                scriptId,
-                documentKind: 'docx',
-                surface,
-            }));
-            // 内联脚本节点保留为 VDOCX 文档真相；运行时只显式执行审查通过的源码。
-            scriptElement.dataset.vdocReviewLevel = review.level;
-            if (!review.allowed) {
-                island.dataset.vdocScriptRefused = 'true';
-                return;
-            }
-            island.removeAttribute('data-vdoc-script-refused');
-            island.removeAttribute('data-bound');
-            island.querySelectorAll('[data-bound]').forEach((node) =>
-                node.removeAttribute('data-bound')
-            );
-
-            const runtime = Object.freeze({
-                surface,
-                root: island,
-                scriptId,
-                addCleanup(callback) {
-                    if (typeof callback === 'function') cleanups.push(callback);
-                    return callback;
-                },
-                requestAnimationFrame: trackedRequestAnimationFrame,
-                cancelAnimationFrame: trackedCancelAnimationFrame,
-                setTimeout: trackedSetTimeout,
-                clearTimeout: trackedClearTimeout,
-                setInterval: trackedSetInterval,
-                clearInterval: trackedClearInterval,
-            });
-
-            try {
-                const execute = new Function(
-                    'scene',
-                    'runtime',
-                    'document',
-                    'requestAnimationFrame',
-                    'cancelAnimationFrame',
-                    'setTimeout',
-                    'clearTimeout',
-                    'setInterval',
-                    'clearInterval',
-                    source
-                );
-                const returned = execute.call(
-                    island,
-                    island,
-                    runtime,
-                    createScopedDocument(island),
-                    trackedRequestAnimationFrame,
-                    trackedCancelAnimationFrame,
-                    trackedSetTimeout,
-                    trackedClearTimeout,
-                    trackedSetInterval,
-                    trackedClearInterval
-                );
-                if (typeof returned === 'function') cleanups.push(returned);
-                else if (returned && typeof returned.dispose === 'function') {
-                    cleanups.push(() => returned.dispose());
-                }
-            } catch (error) {
-                diagnostics.push({
-                    level: 'refuse',
-                    ruleId: 'runtime-execution-error',
-                    message: `脚本执行失败：${error.message}`,
-                    scriptId,
-                    documentKind: 'docx',
-                    surface,
-                });
-                console.error(`[Scriptorium] Document island ${scriptId} failed:`, error);
-            }
-        });
-
-        recordProgrammableDiagnostics(diagnostics);
-        state.slideRuntimeDisposer = () => {
-            if (disposed) return;
-            disposed = true;
-            animationFrames.forEach((id) => window.cancelAnimationFrame(id));
-            timeouts.forEach((id) => window.clearTimeout(id));
-            intervals.forEach((id) => window.clearInterval(id));
-            animationFrames.clear();
-            timeouts.clear();
-            intervals.clear();
-            [...cleanups].reverse().forEach((cleanup) => {
-                try {
-                    cleanup();
-                } catch (error) {
-                    console.error('[Scriptorium] Document island cleanup failed:', error);
-                }
-            });
-        };
-        state.slideRuntimeIdentity = {
-            slideId: state.document?.manifest?.id || 'document',
-            surface,
-            root: runtimeRoot,
-            runtime: { diagnostics },
-        };
-        return { diagnostics };
+        return runtimeController.recordDiagnostics(diagnostics);
     }
 
     function activateProgrammableContent(surface = state.mode) {
-        if (isSlideDeck()) {
-            activateCurrentSlideRuntime(surface);
-            return;
-        }
-        const root = surface === 'read' ? getReadRoot() : getRenderRoot();
-        const runtimeRoot = surface === 'read'
-            ? root?.querySelector('.vdoc-paged-runtime')
-            : root?.querySelector('.vdoc-flow-runtime');
-        if (runtimeRoot) runDocumentRuntime(runtimeRoot, surface);
-        else disposeSlideRuntime();
+        return runtimeController.activate(surface);
     }
 
     function activateCurrentSlideRuntime(surface = state.mode) {
-        if (!isSlideDeck()) {
-            disposeSlideRuntime();
-            return;
-        }
-        const slide = activeSlide();
-        const root = surface === 'read' ? getReadRoot() : getRenderRoot();
-        let runtimeRoot;
-        if (surface === 'read') {
-            runtimeRoot = root?.querySelector(
-                `[data-vdoc-slide-id="${CSS.escape(slide?.id || '')}"]`
-            ) || root?.querySelectorAll('.vdoc-page')?.[state.activeSlideIndex];
-        } else {
-            runtimeRoot = root?.querySelector('.vdoc-slide-editor-runtime');
-        }
-        if (!runtimeRoot) {
-            disposeSlideRuntime();
-            return;
-        }
-        runSlideRuntime(slide, runtimeRoot, surface);
+        return runtimeController.activateCurrentSlide(surface);
     }
 
     function renderDocument() {
@@ -1039,15 +668,16 @@ ${surface === 'edit' ? `
 
         if (isSlideDeck()) {
             const slide = activeSlide();
+            const source = parsedSlide(slide);
             runtime.className = 'vdoc-runtime vdoc-slide-editor-runtime';
             runtime.dataset.slideId = slide?.id || '';
-            runtime.innerHTML = slide?.html || '';
+            runtime.innerHTML = source.html;
             const slideStyle = document.createElement('style');
             slideStyle.dataset.vdocSlideStyle = slide?.id || '';
-            slideStyle.textContent = slide?.css || '';
+            slideStyle.textContent = source.css;
             root.appendChild(slideStyle);
         } else {
-            pagination.renderContinuous(state.document.source.html, runtime, {
+            pagination.renderContinuous(parsedDocument().html, runtime, {
                 ensureIds: core.ensureTextNodeIds,
             });
         }
@@ -1055,8 +685,13 @@ ${surface === 'edit' ? `
 
         root.querySelectorAll(core.EDITABLE_SELECTOR).forEach((editable) => {
             editable.contentEditable = 'true';
-            editable.spellcheck = true;
+            // Chromium 的原生拼写服务会在 contenteditable 输入和换行时同步参与
+            // 文本标注。中文富文档收益很低，却可能造成与文档长度无关的按键抖动。
+            editable.spellcheck = false;
         });
+        state.renderedTextBlocks = [...root.querySelectorAll('[data-vdoc-text]')];
+        state.pendingRenderedNodes.clear();
+        state.pendingRenderedAttributes.clear();
         bindRenderSurface(root);
         updatePageZoomLayout(root);
         if (state.mode === 'render') {
@@ -1085,10 +720,11 @@ ${surface === 'edit' ? `
         runtime.dataset.sceneKind = state.document.manifest.scene.kind;
         root.append(style, runtime);
         const previewHtml = isSlideDeck()
-            ? state.document.source.slides.map((slide) =>
-                `<section data-vdoc-slide data-vdoc-slide-id="${escapeHtml(slide.id)}">${slide.html}<style>${slide.css}</style></section>`
-            ).join('\n')
-            : state.document.source.html;
+            ? state.document.source.slides.map((slide) => {
+                const source = parsedSlide(slide);
+                return `<section data-vdoc-slide data-vdoc-slide-id="${escapeHtml(slide.id)}">${source.html}<style>${source.css}</style></section>`;
+            }).join('\n')
+            : parsedDocument().html;
         state.previewResult = pagination.paginate(previewHtml, runtime, {
             ensureIds: core.ensureTextNodeIds,
             scene: core.createSceneConfig(state.document.manifest.scene),
@@ -1115,10 +751,14 @@ ${surface === 'edit' ? `
         return `${buildDocumentStyle(surface)
             .replace('@import url("../vendor/katex.min.css");', '')
             .replace(':host {', ':root {')
-            .replace(documentCssForShadow(), state.document.source.css)
+            .replace(documentCssForShadow(), isSlideDeck()
+                ? state.document.source.deckCss
+                : parsedDocument().css)
             .replace(/transform:\s*scale\(var\(--vdoc-zoom,\s*1\)\);/g, 'transform: none;')
-            .replace(/margin-bottom:\s*calc\(var\(--vdoc-page-gap\)\s*\+\s*var\(--vdoc-zoom-height-compensation,\s*0px\)\)\s*!important;/g,
-                'margin-bottom: var(--vdoc-page-gap) !important;')}
+            .replace(
+                /margin:\s*0\s+auto\s+calc\(var\(--vdoc-page-gap\)\s*\+\s*var\(--vdoc-zoom-height-compensation,\s*0px\)\)\s*!important;/g,
+                'margin: 0 auto var(--vdoc-page-gap) !important;'
+            )}
 @page { size: ${scene.page.width} ${scene.page.height}; margin: 0; }
 html, body { margin: 0; background: #fff; }
 html[data-vdoc-pdf="true"] *, html[data-vdoc-pdf="true"] *::before, html[data-vdoc-pdf="true"] *::after {
@@ -1149,16 +789,21 @@ html[data-vdoc-pdf="true"] *, html[data-vdoc-pdf="true"] *::before, html[data-vd
         const ratioHeight = Number(ratioParts?.[2]) || 9;
         const numericRatio = ratioWidth / ratioHeight;
         const cssAspectRatio = `${ratioWidth} / ${ratioHeight}`;
-        const slideMarkup = slides.map((slide, index) => `
+        const slideMarkup = slides.map((slide, index) => {
+            const source = parsedSlide(slide);
+            return `
 <section class="vcp-slide${index === 0 ? ' active' : ''}"
     data-slide-index="${index}"
     data-slide-id="${escapeHtml(slide.id)}"
     data-transition="${escapeHtml(core.normalizeTransition(slide.transition))}"
     aria-hidden="${index === 0 ? 'false' : 'true'}">
-    <style>${String(slide.css || '').replace(/<\/style/gi, '<\\/style')}</style>
-    ${slide.html}
-</section>`).join('\n');
-        const slideScripts = slides.map((slide, index) => slide.script
+    <style>${String(source.css).replace(/<\/style/gi, '<\\/style')}</style>
+    ${source.html}
+</section>`;
+        }).join('\n');
+        const slideScripts = slides.map((slide, index) => {
+            const source = parsedSlide(slide);
+            return source.script
             ? `(() => {
     const scene = document.querySelector('[data-slide-index="${index}"]');
     if (!scene) return;
@@ -1183,14 +828,15 @@ html[data-vdoc-pdf="true"] *, html[data-vdoc-pdf="true"] *::before, html[data-vd
             'scene',
             'deck',
             'document',
-            ${inlineScriptLiteral(slide.script)}
+            ${inlineScriptLiteral(source.script)}
         );
         run.call(scene, scene, window.VCPDeck, scopedDocument);
     } catch (error) {
         console.error('[VCPDeck] Scene ${String(slide.id).replace(/['\\\r\n]/g, '')} script failed:', error);
     }
 })();`
-            : '').filter(Boolean).join('\n');
+                : '';
+        }).filter(Boolean).join('\n');
 
         return `<!doctype html>
 <html lang="${language}">
@@ -1199,7 +845,7 @@ html[data-vdoc-pdf="true"] *, html[data-vdoc-pdf="true"] *::before, html[data-vd
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>${title}</title>
 <style>
-${state.document.source.css}
+${state.document.source.deckCss}
 ${styleLibrary.compileCss([...state.usedAdvancedStyleIds])}
 *{box-sizing:border-box}
 html,body{width:100%;height:100%;margin:0;overflow:hidden;background:#090b0c;color:#fff}
@@ -1291,7 +937,7 @@ ${slideScripts}
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${title}</title>
 <style>
-${state.document.source.css}
+${parsedDocument().css}
 ${compiledStyles}
 html,body{margin:0;min-height:100%}
 body{padding:clamp(24px,6vw,96px)}
@@ -1301,7 +947,7 @@ body{padding:clamp(24px,6vw,96px)}
 </head>
 <body>
 <main class="vdoc-flow-export">
-${state.document.source.html}
+${parsedDocument().html}
 </main>
 </body>
 </html>`;
@@ -1321,6 +967,8 @@ ${state.document.source.html}
 
     async function exportRichDocument(format) {
         if (!state.ready || state.saving) return false;
+        finalizeEditBurst();
+        const context = asyncCoordinator.captureContext();
         try {
             if (state.mode === 'html' || state.mode === 'css') {
                 if (applySourceChanges(false) === false) return false;
@@ -1339,6 +987,9 @@ ${state.document.source.html}
                 await new Promise((resolve) =>
                     requestAnimationFrame(() => requestAnimationFrame(resolve))
                 );
+                if (!asyncCoordinator.isContextCurrent(context, { revision: true })) {
+                    return false;
+                }
                 html = buildPagedExportHtml();
             }
             const baseName = state.currentName.replace(/\.(?:vdocx|vpptx)$/i, '');
@@ -1351,7 +1002,7 @@ ${state.document.source.html}
                 programmableDependencies:
                     state.document.manifest.programmableDependencies || [],
             });
-            if (!result?.success) return false;
+            if (!result?.success || !asyncCoordinator.isContextCurrent(context)) return false;
             showToast(`已导出 · ${result.name}`, 'success');
             return true;
         } catch (error) {
@@ -1361,6 +1012,13 @@ ${state.document.source.html}
     }
 
     function bindRenderSurface(root) {
+        // ShadowRoot 会在重渲染时复用。必须先移除上一轮委托监听器，
+        // 否则每次应用源码或切页都会叠加一套 input/keydown 处理器。
+        state.renderSurfaceAbortController?.abort();
+        const controller = new AbortController();
+        state.renderSurfaceAbortController = controller;
+        const listenerOptions = { signal: controller.signal };
+
         root.addEventListener('focusin', (event) => {
             const page = event.target.closest?.('.vdoc-page');
             if (page) {
@@ -1369,13 +1027,16 @@ ${state.document.source.html}
             }
             const block = event.target.closest?.('[data-vdoc-block]');
             if (block) state.activeEditableBlock = block;
-            syncFormattingControls(event.target);
-        });
+            scheduleFormattingControls(event.target);
+        }, listenerOptions);
 
         root.addEventListener('pointerdown', (event) => {
             if (event.button !== 0) return;
             const block = event.target.closest?.('[data-vdoc-text]');
-            if (!block) return;
+            if (!block) {
+                createTextBlockAtBlankPoint(event);
+                return;
+            }
             const blockId = block.dataset.vdocText;
             state.pointerSelectionAnchorId = blockId;
             state.pointerSelectingBlocks = false;
@@ -1392,48 +1053,77 @@ ${state.document.source.html}
                 state.blockSelectionAnchorId = blockId;
                 if (state.explicitBlockSelection) clearExplicitBlockSelection();
             }
-        });
+        }, listenerOptions);
 
         root.addEventListener('pointermove', (event) => {
             if (!(event.buttons & 1) || !state.pointerSelectionAnchorId) return;
             const block = event.target.closest?.('[data-vdoc-text]');
             const blockId = block?.dataset?.vdocText;
-            if (!blockId || blockId === state.pointerSelectionAnchorId) return;
+            if (!blockId || blockId === state.pointerSelectionAnchorId
+                || blockId === state.pendingPointerSelectionId) return;
             event.preventDefault();
             state.pointerSelectingBlocks = true;
-            selectBlockInterval(state.pointerSelectionAnchorId, blockId, { preserveAnchor: true });
-        });
+            state.pendingPointerSelectionId = blockId;
+            if (state.pointerSelectionFrame !== null) return;
+            state.pointerSelectionFrame = window.requestAnimationFrame(() => {
+                state.pointerSelectionFrame = null;
+                const focusId = state.pendingPointerSelectionId;
+                state.pendingPointerSelectionId = null;
+                if (focusId && state.pointerSelectionAnchorId) {
+                    selectBlockInterval(
+                        state.pointerSelectionAnchorId,
+                        focusId,
+                        { preserveAnchor: true }
+                    );
+                }
+            });
+        }, listenerOptions);
 
         root.addEventListener('mouseup', () => {
+            if (state.pointerSelectionFrame !== null) {
+                window.cancelAnimationFrame(state.pointerSelectionFrame);
+                state.pointerSelectionFrame = null;
+            }
+            const focusId = state.pendingPointerSelectionId;
+            state.pendingPointerSelectionId = null;
+            if (focusId && state.pointerSelectionAnchorId) {
+                selectBlockInterval(
+                    state.pointerSelectionAnchorId,
+                    focusId,
+                    { preserveAnchor: true }
+                );
+            }
             if (!state.pointerSelectingBlocks) captureCurrentSelection();
             state.pointerSelectionAnchorId = null;
             state.pointerSelectingBlocks = false;
-            syncFormattingFromCurrentSelection();
-        });
-        root.addEventListener('keyup', () => {
+            scheduleFormattingFromCurrentSelection();
+        }, listenerOptions);
+        root.addEventListener('keyup', (event) => {
+            // 普通输入、Enter 与 Backspace 不改变当前字符格式，无需在每个按键后
+            // 强制 getComputedStyle 和遍历数百个系统字体选项。
+            const selectionKeys = new Set([
+                'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown',
+                'Home', 'End', 'PageUp', 'PageDown',
+            ]);
+            if (!selectionKeys.has(event.key) && !event.shiftKey) return;
             captureCurrentSelection();
-            syncFormattingFromCurrentSelection();
-        });
-        root.addEventListener('keydown', handleBlockEditingKeydown);
+            scheduleFormattingFromCurrentSelection();
+        }, listenerOptions);
+        root.addEventListener('keydown', handleBlockEditingKeydown, listenerOptions);
 
         root.addEventListener('input', (event) => {
             const editable = event.target.closest?.('[data-vdoc-text]');
             if (!editable) return;
-            updateSourceNode(editable);
+            queueRenderedNodeUpdate(editable);
             window.ScriptoriumPretext?.evictNode(editable.dataset.vdocText);
-            markDirty();
-            window.clearTimeout(state.renderUpdateTimer);
-            state.renderUpdateTimer = window.setTimeout(() => {
-                captureSnapshot();
-                renderOutline();
-            }, 450);
-        });
+            markDirty({ coalesce: true });
+        }, listenerOptions);
 
         root.addEventListener('contextmenu', (event) => {
             if (!state.explicitBlockSelection && !captureCurrentSelection()) return;
             event.preventDefault();
             showSelectionBar(event.clientX, event.clientY);
-        });
+        }, listenerOptions);
     }
 
     function currentRenderSelection() {
@@ -1443,7 +1133,7 @@ ${state.document.source.html}
     function editableBlocksForRange(range) {
         const root = getRenderRoot();
         if (!root || !range || range.collapsed) return [];
-        return [...root.querySelectorAll('[data-vdoc-text]')].filter((block) => {
+        return allRenderedTextBlocks().filter((block) => {
             try {
                 return range.intersectsNode(block);
             } catch {
@@ -1453,7 +1143,14 @@ ${state.document.source.html}
     }
 
     function allRenderedTextBlocks() {
-        return [...(getRenderRoot()?.querySelectorAll('[data-vdoc-text]') || [])];
+        const root = getRenderRoot();
+        if (!root) return [];
+        if (state.renderedTextBlocks.length
+            && state.renderedTextBlocks.every((block) => block.isConnected && root.contains(block))) {
+            return state.renderedTextBlocks;
+        }
+        state.renderedTextBlocks = [...root.querySelectorAll('[data-vdoc-text]')];
+        return state.renderedTextBlocks;
     }
 
     function blocksForIds(ids = state.selectionBlockIds) {
@@ -1514,7 +1211,7 @@ ${state.document.source.html}
         selection.removeAllRanges();
         selection.addRange(range);
         state.activeEditableBlock = blocks[0];
-        syncFormattingControls(blocks[0]);
+        scheduleFormattingControls(blocks[0]);
         updateBlockSelectionPresentation();
         return true;
     }
@@ -1690,11 +1387,16 @@ ${state.document.source.html}
 
     function syncSelectClosestFont(select, fontFamily) {
         if (!select) return;
-        const target = firstFontFamily(fontFamily).toLowerCase();
-        const option = [...select.options].find((item) =>
-            firstFontFamily(item.value).toLowerCase() === target
-        );
-        if (option) select.value = option.value;
+        let lookup = state.fontOptionLookup.get(select);
+        if (!lookup || lookup.size !== select.options.length) {
+            lookup = new Map([...select.options].map((option) => [
+                firstFontFamily(option.value).toLowerCase(),
+                option.value,
+            ]));
+            state.fontOptionLookup.set(select, lookup);
+        }
+        const value = lookup.get(firstFontFamily(fontFamily).toLowerCase());
+        if (value !== undefined && select.value !== value) select.value = value;
     }
 
     function syncSelectClosestSize(select, pixelSize) {
@@ -1739,10 +1441,23 @@ ${state.document.source.html}
         }
     }
 
-    function syncFormattingFromCurrentSelection() {
+    function scheduleFormattingControls(target) {
+        state.pendingFormattingTarget = target;
+        if (state.formattingSyncFrame !== null) return;
+        state.formattingSyncFrame = window.requestAnimationFrame(() => {
+            state.formattingSyncFrame = null;
+            const pendingTarget = state.pendingFormattingTarget;
+            state.pendingFormattingTarget = null;
+            if (pendingTarget?.isConnected !== false) {
+                syncFormattingControls(pendingTarget);
+            }
+        });
+    }
+
+    function scheduleFormattingFromCurrentSelection() {
         const selection = currentRenderSelection();
         const node = selection?.focusNode || selection?.anchorNode;
-        if (node) syncFormattingControls(node);
+        if (node) scheduleFormattingControls(node);
     }
 
     function applyInlineStyle(property, value, preferSaved = false) {
@@ -1751,8 +1466,12 @@ ${state.document.source.html}
             wrapper.style[property] = value;
         }, preferSaved);
         if (!wrappers.length) return false;
-        syncRenderedDocumentToSource();
-        syncFormattingControls(wrappers[0]);
+        const affectedBlocks = [...new Set(wrappers
+            .map((wrapper) => wrapper.closest('[data-vdoc-text]'))
+            .filter(Boolean))];
+        queueRenderedNodesUpdate(affectedBlocks);
+        markDirty({ coalesce: true });
+        scheduleFormattingControls(wrappers[0]);
         return true;
     }
 
@@ -1783,11 +1502,11 @@ ${state.document.source.html}
         const prepared = template.content.firstElementChild;
         prepared?.querySelectorAll?.(core.EDITABLE_SELECTOR).forEach((editable) => {
             editable.contentEditable = 'true';
-            editable.spellcheck = true;
+            editable.spellcheck = false;
         });
         if (prepared?.matches?.(core.EDITABLE_SELECTOR)) {
             prepared.contentEditable = 'true';
-            prepared.spellcheck = true;
+            prepared.spellcheck = false;
         }
         return prepared;
     }
@@ -1819,8 +1538,71 @@ ${state.document.source.html}
         return prepareEditableStructure(element);
     }
 
+    function createTextBlockAtBlankPoint(event) {
+        if (!state.ready || state.mode !== 'render' || isSlideDeck()
+            || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) {
+            return false;
+        }
+        const root = getRenderRoot();
+        const target = event.target;
+        if (!root || !target?.matches?.(
+            '.vdoc-flow-runtime, [data-vdoc-preserve="true"]'
+        )) {
+            return false;
+        }
+
+        const container = target.matches('[data-vdoc-preserve="true"]')
+            ? target
+            : root.querySelector('[data-vdoc-preserve="true"]');
+        if (!container) return false;
+
+        flushPendingRenderedEdits();
+        const blocks = allRenderedTextBlocks().filter((block) => container.contains(block));
+        let anchor = null;
+        let position = 'after';
+        if (blocks.length) {
+            anchor = blocks.reduce((closest, candidate) => {
+                const rect = candidate.getBoundingClientRect();
+                const distance = event.clientY < rect.top
+                    ? rect.top - event.clientY
+                    : event.clientY > rect.bottom
+                        ? event.clientY - rect.bottom
+                        : 0;
+                return !closest || distance < closest.distance
+                    ? { block: candidate, rect, distance }
+                    : closest;
+            }, null);
+            position = event.clientY < anchor.rect.top + anchor.rect.height / 2
+                ? 'before'
+                : 'after';
+        }
+
+        event.preventDefault();
+        if (state.explicitBlockSelection) clearExplicitBlockSelection();
+        const paragraph = createEditableBlock('paragraph');
+        if (anchor?.block?.parentElement) {
+            if (position === 'before') anchor.block.before(paragraph);
+            else anchor.block.after(paragraph);
+        } else {
+            container.appendChild(paragraph);
+        }
+        state.renderedTextBlocks = [];
+        insertSourceBlockRelativeTo(
+            blockIdentityOf(anchor?.block),
+            paragraph,
+            position
+        );
+        state.activeEditableBlock = paragraph;
+        state.blockSelectionAnchorId = paragraph.dataset.vdocText;
+        placeCaretAtStart(paragraph);
+        markDirty({ coalesce: true });
+        scheduleEditSnapshot();
+        return true;
+    }
+
     function insertStructureBlock(type = elements['block-type-select']?.value || 'paragraph') {
         if (!state.ready || state.mode !== 'render') return false;
+        flushPendingRenderedEdits();
         const root = getRenderRoot();
         const current = state.activeEditableBlock && root.contains(state.activeEditableBlock)
             ? state.activeEditableBlock
@@ -1832,47 +1614,183 @@ ${state.document.source.html}
             || root.querySelector('.vdoc-flow-runtime');
         if (anchor?.parentElement) anchor.after(block);
         else parent.appendChild(block);
+        state.renderedTextBlocks = [];
+
+        // 只把这一个新建块写入源码。锚点及其它任何节点的源码形态保持原样，
+        // 页内脚本对实时 DOM 的改动不会经由此路径进入文档真相。
+        insertSourceBlockRelativeTo(blockIdentityOf(anchor), block, 'after');
 
         state.activeEditableBlock = block.matches('[data-vdoc-block]')
             ? block
             : block.querySelector('[data-vdoc-block]');
         const focusTarget = state.activeEditableBlock || block.querySelector('td, th');
-        syncContinuousStructureToSource();
-        renderOutline();
-        scheduleMetrics();
         if (focusTarget) placeCaretAtStart(focusTarget);
-        markDirty();
-        captureSnapshot();
+        markDirty({ coalesce: true });
+        scheduleEditSnapshot();
         return true;
     }
 
-    function reflowAfterStructureChange(focusNodeId = null) {
+    // ── 定向源码写入 ──────────────────────────────────────────────
+    //
+    // 渲染树是源码的产物，不是源码的副本。页内脚本（Anime.js、Three.js、
+    // 自定义交互等）会持续改写实时 DOM 的 style、class、data-* 和子节点，
+    // 这些都属于运行时状态。因此编辑器绝不整树序列化渲染面。
+    //
+    // 人类在渲染面的能力被严格限定为：编辑文本块内容、增删文本块、
+    // 调整块级格式。每一种都有明确锚点，下列函数只在源码中定位该锚点，
+    // 并只改动那一处。任何未被显式编辑的节点，其源码形态原样保留。
+
+    function withCurrentSourceDocument(mutate) {
+        const template = document.createElement('template');
+        template.innerHTML = currentSourceHtml();
+        if (mutate(template.content) === false) return false;
+        setCurrentSourceHtml(template.innerHTML);
+        state.document.manifest.modifiedAt = new Date().toISOString();
+        return true;
+    }
+
+    function sourceBlockById(fragment, blockId) {
+        if (!blockId) return null;
+        return fragment.querySelector(`[data-vdoc-text="${CSS.escape(blockId)}"]`)
+            || fragment.querySelector(`[data-vdoc-block="${CSS.escape(blockId)}"]`);
+    }
+
+    function blockIdentityOf(renderedBlock) {
+        return renderedBlock?.dataset?.vdocText
+            || renderedBlock?.dataset?.vdocBlock
+            || renderedBlock?.querySelector?.('[data-vdoc-text]')?.dataset?.vdocText
+            || null;
+    }
+
+    function cleanBlockForSource(renderedBlock) {
+        // 新建块由 createEditableBlock() 就地构造，尚未经过任何页面脚本，
+        // 因此可以安全序列化。仅剥离编辑器自身附加的可编辑标记。
+        const clone = renderedBlock.cloneNode(true);
+        restoreMathSemantics(clone);
+        [clone, ...clone.querySelectorAll(
+            '[contenteditable], [spellcheck], [data-vdoc-editor-selected]'
+        )].forEach((node) => {
+            node.removeAttribute?.('contenteditable');
+            node.removeAttribute?.('spellcheck');
+            node.removeAttribute?.('data-vdoc-editor-selected');
+        });
+        return clone;
+    }
+
+    function insertSourceBlockRelativeTo(anchorId, renderedBlock, position) {
+        const prepared = cleanBlockForSource(renderedBlock);
+        return withCurrentSourceDocument((fragment) => {
+            const anchor = sourceBlockById(fragment, anchorId);
+            if (anchor) {
+                if (position === 'before') anchor.before(prepared);
+                else anchor.after(prepared);
+                return true;
+            }
+            // 没有锚点时只能追加到正文容器末尾。仍然是定向写入：
+            // 只新增这一个节点，不触碰任何既有节点。
+            const container = fragment.querySelector('[data-vdoc-preserve="true"]')
+                || fragment.lastElementChild;
+            if (!container) return false;
+            container.appendChild(prepared);
+            return true;
+        });
+    }
+
+    function removeSourceBlock(blockId) {
+        if (!blockId) return false;
+        return withCurrentSourceDocument((fragment) => {
+            const target = sourceBlockById(fragment, blockId);
+            if (!target) return false;
+            target.remove();
+            return true;
+        });
+    }
+
+    function removeSourceBlocks(blockIds) {
+        const ids = [...new Set(blockIds.filter(Boolean))];
+        if (!ids.length) return false;
+        return withCurrentSourceDocument((fragment) => {
+            let changed = false;
+            ids.forEach((blockId) => {
+                const target = sourceBlockById(fragment, blockId);
+                if (!target) return;
+                target.remove();
+                changed = true;
+            });
+            return changed;
+        });
+    }
+
+    function deleteExplicitBlockSelection() {
+        if (!state.explicitBlockSelection) return false;
+        const root = getRenderRoot();
+        const selectedBlocks = blocksForIds().filter((block) =>
+            block.matches('[data-vdoc-block][data-vdoc-removable="true"]')
+        );
+        if (!root || !selectedBlocks.length) return false;
+
+        flushPendingRenderedEdits();
+        const selectedSet = new Set(selectedBlocks);
+        const orderedBlocks = allRenderedTextBlocks();
+        const firstIndex = orderedBlocks.indexOf(selectedBlocks[0]);
+        let target = null;
+        for (let index = firstIndex - 1; index >= 0; index -= 1) {
+            if (!selectedSet.has(orderedBlocks[index])) {
+                target = orderedBlocks[index];
+                break;
+            }
+        }
+        if (!target) {
+            target = orderedBlocks.find((block, index) =>
+                index > firstIndex && !selectedSet.has(block)
+            ) || null;
+        }
+
+        const removedIds = selectedBlocks.map(blockIdentityOf).filter(Boolean);
+        removeSourceBlocks(removedIds);
+        selectedBlocks.forEach((block) => {
+            window.ScriptoriumPretext?.evictNode(block.dataset.vdocText);
+            block.remove();
+        });
+        state.renderedTextBlocks = [];
+        state.explicitBlockSelection = false;
+        state.selectionRange = null;
+        state.selectionText = '';
+        state.selectionBlockIds = [];
+        state.blockSelectionAnchorId = null;
+        currentRenderSelection()?.removeAllRanges();
+
+        // 全文删除后仍保留一个可继续输入的段落。表格行等结构容器不接收
+        // 非法的段落子节点，兜底段落只追加到正文级保留容器。
+        if (!root.querySelector('[data-vdoc-text]')) {
+            const paragraph = createEditableBlock('paragraph');
+            const parent = root.querySelector(
+                '[data-vdoc-preserve="true"]:not(table):not(thead):not(tbody):not(tfoot):not(tr):not(ul):not(ol)'
+            ) || root.querySelector('.vdoc-flow-runtime, .vdoc-slide-editor-runtime');
+            parent?.appendChild(paragraph);
+            insertSourceBlockRelativeTo(null, paragraph, 'after');
+            target = paragraph;
+            state.renderedTextBlocks = [];
+        }
+
+        updateBlockSelectionPresentation();
+        state.activeEditableBlock = target?.isConnected ? target : null;
+        if (state.activeEditableBlock) {
+            focusRenderedBlock(state.activeEditableBlock.dataset.vdocText);
+        }
+        markDirty({ coalesce: true });
+        scheduleEditSnapshot();
+        showToast(`已删除 ${removedIds.length} 个文本块`, 'success');
+        return true;
+    }
+
+    function focusRenderedBlock(focusNodeId) {
         const target = focusNodeId
             ? getRenderRoot()?.querySelector(`[data-vdoc-text="${CSS.escape(focusNodeId)}"]`)
             : state.activeEditableBlock;
-        syncContinuousStructureToSource();
         if (!target) return;
         state.activeEditableBlock = target;
         placeCaretAtStart(target);
-    }
-
-    function syncContinuousStructureToSource() {
-        const runtime = getRenderRoot()?.querySelector(
-            isSlideDeck() ? '.vdoc-slide-editor-runtime' : '.vdoc-flow-runtime'
-        );
-        if (!runtime) return;
-        const clone = runtime.cloneNode(true);
-        restoreMathSemantics(clone);
-        clone.removeAttribute('data-bound');
-        clone.querySelectorAll(
-            '[contenteditable], [spellcheck], [data-vdoc-editor-selected], [data-bound]'
-        ).forEach((node) => {
-            node.removeAttribute('contenteditable');
-            node.removeAttribute('spellcheck');
-            node.removeAttribute('data-vdoc-editor-selected');
-            node.removeAttribute('data-bound');
-        });
-        setCurrentSourceHtml(clone.innerHTML);
     }
 
     function caretIsAtBlockStart(selection, block) {
@@ -1887,21 +1805,110 @@ ${state.document.source.html}
 
     function insertParagraphBeforeBlock(block) {
         if (!block?.parentElement) return null;
+        flushPendingRenderedEdits();
         const paragraph = createEditableBlock('paragraph');
         block.before(paragraph);
+        state.renderedTextBlocks = [];
+        insertSourceBlockRelativeTo(blockIdentityOf(block), paragraph, 'before');
         state.activeEditableBlock = paragraph;
-        syncContinuousStructureToSource();
-        renderOutline();
-        scheduleMetrics();
-        markDirty();
-        captureSnapshot();
+        markDirty({ coalesce: true });
+        scheduleEditSnapshot();
         placeCaretAtStart(paragraph);
         return paragraph;
+    }
+
+    function insertStableSoftBreak(range, selection, block) {
+        // 新建文本块以单个 BR 作为空内容占位。输入第一行后，Chromium 可能
+        // 保留这个尾部 BR；Range.insertNode() 还会在文本末尾分裂出空文本
+        // 节点。若仅用 nextSibling 判断段尾，第一次 Enter 的光标就可能落在
+        // “换行 BR / 空文本 / 原占位 BR”之间的歧义位置，看起来完全没换行。
+        const trailingRange = range.cloneRange();
+        try {
+            trailingRange.setEnd(block, block.childNodes.length);
+        } catch {
+            trailingRange.selectNodeContents(block);
+        }
+        const trailingFragment = trailingRange.cloneContents();
+        const trailingElements = [...trailingFragment.querySelectorAll('*')];
+        const hasTrailingContent = Boolean(trailingFragment.textContent)
+            || trailingElements.some((node) => node.tagName !== 'BR');
+
+        const lineBreak = document.createElement('br');
+        range.insertNode(lineBreak);
+
+        // insertNode 在文本边界产生的零长度节点没有语义，却会让 Chromium
+        // 无法稳定决定 BR 前后哪一行承载光标。
+        while (lineBreak.nextSibling?.nodeType === Node.TEXT_NODE
+            && lineBreak.nextSibling.nodeValue === '') {
+            lineBreak.nextSibling.remove();
+        }
+
+        if (!hasTrailingContent) {
+            // 光标后若只有旧的占位 BR，直接复用；否则建立一个明确占位。
+            // 使用 setStartBefore 而非 setStartAfter(lineBreak)，把落点锚定到
+            // 具体节点边界，保证新建块的第一次 Enter 也立即显示新行。
+            let placeholder = lineBreak.nextSibling;
+            if (placeholder?.nodeType !== Node.ELEMENT_NODE
+                || placeholder.tagName !== 'BR') {
+                placeholder = document.createElement('br');
+                lineBreak.after(placeholder);
+            }
+            range.setStartBefore(placeholder);
+        } else {
+            range.setStartAfter(lineBreak);
+        }
+        range.collapse(true);
+        selection.removeAllRanges();
+        selection.addRange(range);
+        return lineBreak;
+    }
+
+    function insertSoftBreakAtCurrentSelection(block) {
+        const selection = currentRenderSelection();
+        const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
+        if (!range || !block?.contains(range.commonAncestorContainer)) return false;
+
+        range.deleteContents();
+        insertStableSoftBreak(range, selection, block);
+        queueRenderedNodeUpdate(block);
+        window.ScriptoriumPretext?.evictNode(block.dataset.vdocText);
+        state.activeEditableBlock = block;
+        markDirty({ coalesce: true });
+        return true;
     }
 
     function handleBlockEditingKeydown(event) {
         const editable = event.target.closest?.('[data-vdoc-text]');
         const selection = getRenderRoot()?.getSelection?.() || window.getSelection();
+
+        // keyCode 229 兼容部分 Chromium/Windows 输入法未正确暴露
+        // KeyboardEvent.isComposing 的情况。不能 preventDefault，否则会阻止
+        // 候选词上屏。也不能等待 compositionend：部分 Windows 输入法会将
+        // 该事件延后数百毫秒。候选词提交和 input 默认动作会在浏览器进入
+        // 下一渲染帧前完成，因此直接在下一帧以提交后的光标补执行换行。
+        if (event.key === 'Enter' && editable
+            && (event.isComposing || event.keyCode === 229)) {
+            const block = editable.closest?.(
+                '[data-vdoc-block][data-vdoc-removable="true"]'
+            ) || editable;
+            state.compositionEnterTarget = block;
+            if (state.compositionEnterFrame !== null) {
+                window.cancelAnimationFrame(state.compositionEnterFrame);
+            }
+            state.compositionEnterFrame = window.requestAnimationFrame(() => {
+                state.compositionEnterFrame = null;
+                const target = state.compositionEnterTarget;
+                state.compositionEnterTarget = null;
+                if (target?.isConnected) insertSoftBreakAtCurrentSelection(target);
+            });
+            return;
+        }
+
+        if (event.key === 'Backspace' && state.explicitBlockSelection) {
+            event.preventDefault();
+            deleteExplicitBlockSelection();
+            return;
+        }
 
         if (event.key === 'Tab' && editable && selection?.isCollapsed && selection.rangeCount) {
             const range = selection.getRangeAt(0);
@@ -1909,21 +1916,21 @@ ${state.document.source.html}
             prefix.selectNodeContents(editable);
             prefix.setEnd(range.startContainer, range.startOffset);
 
-            // 仅在文本块首行头部把 Tab 解释为中文四格缩进；其他位置仍允许
-            // 浏览器执行正常的焦点导航。比例字体中的四个半角空格通常只有
-            // 约一个汉字宽，因此使用两个全角空格稳定实现两个汉字（2em）缩进。
-            if (!prefix.toString()) {
+            // 光标前没有内容或只有 DOCX 遗留的 Tab/空格时，都仍属于首行头部。
+            // 先移除这些可能被 HTML 折叠的隐藏空白，再规范化为两个全角空格，
+            // 避免原始 Tab 导致浏览器执行焦点导航，或重复叠加多份缩进。
+            if (/^[\s\u00a0\u3000]*$/u.test(prefix.toString())) {
                 event.preventDefault();
+                prefix.deleteContents();
                 const indentation = document.createTextNode('\u3000\u3000');
                 range.insertNode(indentation);
                 range.setStartAfter(indentation);
                 range.collapse(true);
                 selection.removeAllRanges();
                 selection.addRange(range);
-                updateSourceNode(editable);
+                queueRenderedNodeUpdate(editable);
                 state.activeEditableBlock = editable;
-                markDirty();
-                captureSnapshot();
+                markDirty({ coalesce: true });
                 return;
             }
         }
@@ -1933,6 +1940,14 @@ ${state.document.source.html}
 
         if (event.key === 'Enter' && !event.shiftKey) {
             event.preventDefault();
+
+            // 某些输入法在 compositionend 后还会为同一次物理按键派发普通
+            // Enter。若延迟换行尚未执行，则由本次 keydown 接管，避免双换行。
+            if (state.compositionEnterFrame !== null) {
+                window.cancelAnimationFrame(state.compositionEnterFrame);
+                state.compositionEnterFrame = null;
+                state.compositionEnterTarget = null;
+            }
 
             // 在块的绝对开头按 Enter，表示在当前块上方创建一个新段落。
             // 这为文档/Scene 的首块提供稳定的“向前插入”入口；其他位置
@@ -1944,62 +1959,51 @@ ${state.document.source.html}
 
             // Enter 必须以当前光标为准。当前选区折叠时不能回退到此前保存的
             // 全文/跨块范围，否则一次回车可能误删整个旧选区。
-            const range = selection?.rangeCount
-                ? selection.getRangeAt(0)
-                : selectedRange();
-            if (!range || !block.contains(range.commonAncestorContainer)) return;
-            range.deleteContents();
-            const lineBreak = document.createElement('br');
-            range.insertNode(lineBreak);
-            range.setStartAfter(lineBreak);
-            range.collapse(true);
-            const selectionAfterBreak = currentRenderSelection();
-            selectionAfterBreak.removeAllRanges();
-            selectionAfterBreak.addRange(range);
-            updateSourceNode(block);
-            window.ScriptoriumPretext?.evictNode(block.dataset.vdocText);
-            markDirty();
-            captureSnapshot();
+            insertSoftBreakAtCurrentSelection(block);
             return;
         }
-
         if (event.key === 'Enter' && event.shiftKey && block.tagName !== 'TD' && block.tagName !== 'TH') {
             event.preventDefault();
+            flushPendingRenderedEdits();
             const next = createEditableBlock('paragraph');
             block.after(next);
+            state.renderedTextBlocks = [];
             const nextId = next.dataset.vdocText
                 || next.querySelector('[data-vdoc-text]')?.dataset.vdocText;
+            insertSourceBlockRelativeTo(blockIdentityOf(block), next, 'after');
             state.activeEditableBlock = next;
-            reflowAfterStructureChange(nextId);
-            scheduleMetrics();
-            markDirty();
-            captureSnapshot();
+            focusRenderedBlock(nextId);
+            markDirty({ coalesce: true });
+            scheduleEditSnapshot();
             return;
         }
 
         const isEmpty = !(block.textContent || '').trim() && !block.querySelector('[data-vdoc-math], img');
         if (event.key !== 'Backspace' || !isEmpty || !selection?.isCollapsed) return;
 
+        flushPendingRenderedEdits();
         const parent = block.parentElement;
+        const removedId = blockIdentityOf(block);
         let target = block.previousElementSibling || block.nextElementSibling;
         event.preventDefault();
         block.remove();
+        state.renderedTextBlocks = [];
+        removeSourceBlock(removedId);
 
         if (parent?.matches('[data-vdoc-preserve="true"]')
             && !parent.querySelector('[data-vdoc-block], table')) {
             target = createEditableBlock('paragraph');
             parent.appendChild(target);
+            insertSourceBlockRelativeTo(null, target, 'after');
         }
 
         target = target?.matches?.('[data-vdoc-block]')
             ? target
             : target?.querySelector?.('[data-vdoc-block]') || getRenderRoot().querySelector('[data-vdoc-block]');
         state.activeEditableBlock = target || null;
-        reflowAfterStructureChange(target?.dataset?.vdocText);
-        renderOutline();
-        scheduleMetrics();
-        markDirty();
-        captureSnapshot();
+        focusRenderedBlock(target?.dataset?.vdocText);
+        markDirty({ coalesce: true });
+        scheduleEditSnapshot();
     }
 
     function decodeMathSource(node) {
@@ -2043,6 +2047,8 @@ ${state.document.source.html}
     }
 
     function semanticInnerHtml(renderedNode) {
+        // 只序列化文本块内部内容。块自身的属性由定向写入路径单独维护，
+        // 页内脚本对宿主节点属性的改动因此无法进入源码。
         const clone = renderedNode.cloneNode(true);
         restoreMathSemantics(clone);
         clone.querySelectorAll('[contenteditable], [spellcheck]').forEach((node) => {
@@ -2052,16 +2058,96 @@ ${state.document.source.html}
         return core.sanitizeHtml(clone.innerHTML);
     }
 
-    function updateSourceNode(renderedNode) {
-        const nodeId = renderedNode?.dataset?.vdocText;
-        if (!nodeId) return;
+    function updateSourceNodes(renderedNodes, attributesById = new Map()) {
+        const nodes = [...new Map(renderedNodes
+            .filter((node) => node?.dataset?.vdocText)
+            .map((node) => [node.dataset.vdocText, node])).values()];
+        if (!nodes.length) return false;
         const template = document.createElement('template');
         template.innerHTML = currentSourceHtml();
-        const target = template.content.querySelector(`[data-vdoc-text="${CSS.escape(nodeId)}"]`);
-        if (!target) return;
-        target.innerHTML = semanticInnerHtml(renderedNode);
+        let changed = false;
+        nodes.forEach((renderedNode) => {
+            const nodeId = renderedNode.dataset.vdocText;
+            const target = template.content.querySelector(
+                `[data-vdoc-text="${CSS.escape(nodeId)}"]`
+            );
+            if (!target) return;
+
+            const html = semanticInnerHtml(renderedNode);
+            if (target.innerHTML !== html) {
+                target.innerHTML = html;
+                changed = true;
+            }
+
+            (attributesById.get(nodeId) || []).forEach((attribute) => {
+                const nextValue = attribute === 'class'
+                    ? renderedNode.className
+                    : renderedNode.getAttribute(attribute);
+                const currentValue = attribute === 'class'
+                    ? target.className
+                    : target.getAttribute(attribute);
+                if (nextValue === currentValue) return;
+                if (nextValue === null || nextValue === '') {
+                    target.removeAttribute(attribute);
+                } else if (attribute === 'class') {
+                    target.className = nextValue;
+                } else {
+                    target.setAttribute(attribute, nextValue);
+                }
+                changed = true;
+            });
+        });
+        if (!changed) return false;
         setCurrentSourceHtml(template.innerHTML);
         state.document.manifest.modifiedAt = new Date().toISOString();
+        return true;
+    }
+
+    function flushPendingRenderedEdits() {
+        window.clearTimeout(state.renderUpdateTimer);
+        state.renderUpdateTimer = null;
+        if (!state.pendingRenderedNodes.size) return false;
+        const nodes = [...state.pendingRenderedNodes.values()];
+        const attributes = new Map(state.pendingRenderedAttributes);
+        state.pendingRenderedNodes.clear();
+        state.pendingRenderedAttributes.clear();
+        return updateSourceNodes(nodes, attributes);
+    }
+
+    function finalizeEditBurst() {
+        window.clearTimeout(state.renderUpdateTimer);
+        state.renderUpdateTimer = null;
+        const sourceChanged = flushPendingRenderedEdits();
+        const hadEditBurst = state.editBurstDirty;
+        state.editBurstDirty = false;
+        if (!sourceChanged && !hadEditBurst) return false;
+
+        // 两秒内的文字输入、回车、格式和结构修改共同凝固为一个历史节点。
+        // captureSnapshot 在这里且只在这里执行，因此一次撤销回退整个操作批次。
+        captureSnapshot();
+        renderOutline();
+        scheduleMetrics();
+        return true;
+    }
+
+    function queueRenderedNodesUpdate(renderedNodes, options = {}) {
+        renderedNodes.forEach((node) => {
+            const nodeId = node?.dataset?.vdocText;
+            if (!nodeId) return;
+            state.pendingRenderedNodes.set(nodeId, node);
+            if (options.attributes?.length) {
+                const attributes = state.pendingRenderedAttributes.get(nodeId) || new Set();
+                options.attributes.forEach((attribute) => attributes.add(attribute));
+                state.pendingRenderedAttributes.set(nodeId, attributes);
+            }
+        });
+        window.clearTimeout(state.renderUpdateTimer);
+        const delay = Number.isFinite(options.delay) ? options.delay : 2000;
+        state.renderUpdateTimer = window.setTimeout(finalizeEditBurst, Math.max(0, delay));
+    }
+
+    function queueRenderedNodeUpdate(renderedNode, options = {}) {
+        queueRenderedNodesUpdate([renderedNode], options);
     }
 
     function initializePageVisibility(root, renderHost = elements['read-host']) {
@@ -2115,136 +2201,38 @@ ${state.document.source.html}
     }
 
     function getSourceValue() {
-        return state.sourceEditor?.getValue() ?? elements['source-editor'].value;
+        return sourceEditorController.getValue();
     }
 
     function setSourceValue(value) {
-        if (state.sourceEditor) state.sourceEditor.setValue(String(value || ''));
-        else elements['source-editor'].value = String(value || '');
+        return sourceEditorController.setValue(value);
     }
 
     function validateSource() {
-        const source = getSourceValue();
-        let valid = true;
-        let message = '源码有效';
-        if (state.sourceMode === 'html') {
-            const template = document.createElement('template');
-            template.innerHTML = source;
-            // script 由可编程内容策略执行依赖本地化和 warn/refuse 审查，
-            // 不能再被旧源码校验器统一拒绝，否则合法本地依赖也无法应用。
-            const blocked = template.content.querySelector('iframe,object,embed');
-            if (blocked) {
-                valid = false;
-                message = `禁止使用 <${blocked.tagName.toLowerCase()}>`;
-            } else if (template.content.querySelector('script')) {
-                message = '源码有效 · 脚本将在应用时执行依赖本地化与安全审查';
-            }
-        } else {
-            const opens = (source.match(/\{/g) || []).length;
-            const closes = (source.match(/\}/g) || []).length;
-            if (opens !== closes) {
-                valid = false;
-                message = `CSS 花括号不平衡：${opens} / ${closes}`;
-            }
-        }
-        elements['source-diagnostics'].textContent = message;
-        elements['source-diagnostics'].classList.toggle('valid', valid);
-        elements['source-diagnostics'].classList.toggle('invalid', !valid);
-        return valid;
+        return sourceEditorController.validate();
     }
 
     function refreshSourceColorMarks() {
-        if (!state.sourceEditor) return;
-        state.sourceColorMarks.forEach((mark) => mark.clear());
-        state.sourceColorMarks = [];
-        const hexPattern = /#[0-9a-fA-F]{3,8}\b/g;
-        state.sourceEditor.eachLine((lineHandle) => {
-            const line = state.sourceEditor.getLineNumber(lineHandle);
-            let match;
-            while ((match = hexPattern.exec(lineHandle.text))) {
-                const mark = state.sourceEditor.markText(
-                    { line, ch: match.index },
-                    { line, ch: match.index + match[0].length },
-                    { className: 'cm-vdoc-color', css: `--cm-color:${match[0]}` }
-                );
-                state.sourceColorMarks.push(mark);
-            }
-        });
-    }
-
-    function sourceColorAtCursor() {
-        if (!state.sourceEditor) return null;
-        const cursor = state.sourceEditor.getCursor();
-        const line = state.sourceEditor.getLine(cursor.line);
-        const pattern = /#[0-9a-fA-F]{3,8}\b/g;
-        let match;
-        while ((match = pattern.exec(line))) {
-            if (cursor.ch >= match.index && cursor.ch <= match.index + match[0].length) {
-                return {
-                    value: match[0],
-                    from: { line: cursor.line, ch: match.index },
-                    to: { line: cursor.line, ch: match.index + match[0].length },
-                };
-            }
-        }
-        return null;
-    }
-
-    function syncSourceColorTool() {
-        const color = sourceColorAtCursor();
-        if (!color || !/^#[0-9a-fA-F]{6}$/.test(color.value)) return;
-        elements['source-color-input'].value = color.value;
-        elements['source-color-swatch'].style.background = color.value;
+        return sourceEditorController.refreshColorMarks();
     }
 
     function replaceSourceColor(value) {
-        if (!state.sourceEditor) return;
-        const color = sourceColorAtCursor();
-        if (color) state.sourceEditor.replaceRange(value, color.from, color.to);
-        else state.sourceEditor.replaceSelection(value);
-        elements['source-color-swatch'].style.background = value;
-        state.sourceEditor.focus();
+        return sourceEditorController.replaceColor(value);
     }
 
     function formatSource() {
-        const source = getSourceValue();
-        if (state.sourceMode === 'html') {
-            setSourceValue(core.formatHtml(source));
-        } else {
-            setSourceValue(core.sanitizeCss(source)
-                .replace(/\s*\{\s*/g, ' {\n    ')
-                .replace(/;\s*/g, ';\n    ')
-                .replace(/\s*\}\s*/g, '\n}\n')
-                .replace(/[ \t]+\n/g, '\n'));
-        }
-        validateSource();
-        refreshSourceColorMarks();
+        return sourceEditorController.format();
     }
 
     function initializeSourceEditor() {
-        if (!window.CodeMirror || state.sourceEditor) return;
-        state.sourceEditor = window.CodeMirror.fromTextArea(elements['source-editor'], {
-            mode: 'htmlmixed',
-            theme: 'material-darker',
-            lineNumbers: true,
-            lineWrapping: true,
-            indentUnit: 4,
-            tabSize: 4,
-            indentWithTabs: false,
-            autoCloseBrackets: true,
-            autoCloseTags: true,
-            viewportMargin: 20,
-        });
-        state.sourceEditor.on('change', () => {
-            validateSource();
-            window.clearTimeout(state.sourceEditorTimer);
-            state.sourceEditorTimer = window.setTimeout(refreshSourceColorMarks, 180);
-        });
-        state.sourceEditor.on('cursorActivity', syncSourceColorTool);
+        return sourceEditorController.initialize();
     }
 
     function switchMode(mode) {
         if (!state.ready) return;
+        if (state.mode === 'render' && mode !== 'render') {
+            finalizeEditBurst();
+        }
         disposeSlideRuntime();
         const isRender = mode === 'render';
         const isRead = mode === 'read';
@@ -2284,10 +2272,16 @@ ${state.document.source.html}
 
         if (isSource) {
             state.sourceMode = mode;
-            elements['source-title'].textContent = mode === 'html' ? 'HTML 源码' : 'CSS 源码';
+            elements['source-title'].textContent = mode === 'html'
+                ? (isSlideDeck() ? '当前页完整源码' : 'HTML 源码')
+                : (isSlideDeck() ? '演示全局 CSS' : '文档全局 CSS');
             elements['source-description'].textContent = mode === 'html'
-                ? '人类编辑渲染结果，AI 始终以此结构为真相'
-                : '样式与纯 CSS 动画由 AI 协助设计';
+                ? (isSlideDeck()
+                    ? '当前页的 <style>、HTML、依赖声明与交互脚本均在此编辑'
+                    : '人类编辑渲染结果，AI 始终以此结构为真相')
+                : (isSlideDeck()
+                    ? '应用于全部页面和演示共享外观；页内样式请编辑当前页完整源码'
+                    : '应用于整份文档的共享样式与 CSS 动画');
             state.sourceEditor?.setOption('mode', mode === 'html' ? 'htmlmixed' : 'css');
             if (mode === 'html') setCurrentSourceHtml(currentSourceHtml());
             setSourceValue(mode === 'html' ? currentSourceHtml() : currentSourceCss());
@@ -2356,8 +2350,9 @@ ${state.document.source.html}
             blocks.forEach((block) => {
                 block.style.lineHeight = String(value);
             });
-            syncRenderedDocumentToSource();
-            syncFormattingControls(blocks[0]);
+            queueRenderedNodesUpdate(blocks, { attributes: ['style'] });
+            markDirty({ coalesce: true });
+            scheduleFormattingControls(blocks[0]);
             return true;
         }
         if (command === 'text-align') {
@@ -2366,43 +2361,27 @@ ${state.document.source.html}
             blocks.forEach((block) => {
                 block.style.textAlign = value;
             });
-            syncRenderedDocumentToSource();
-            syncFormattingControls(blocks[0]);
+            queueRenderedNodesUpdate(blocks, { attributes: ['style'] });
+            markDirty({ coalesce: true });
+            scheduleFormattingControls(blocks[0]);
             return true;
         }
         if (command === 'image') return insertImage();
         return false;
     }
 
-    function syncRenderedDocumentToSource() {
-        const root = getRenderRoot();
-        if (!root) return;
-        const sourceTemplate = document.createElement('template');
-        sourceTemplate.innerHTML = currentSourceHtml();
-        root.querySelectorAll('[data-vdoc-text]').forEach((renderedNode) => {
-            const nodeId = renderedNode.dataset.vdocText;
-            const sourceNode = sourceTemplate.content.querySelector(
-                `[data-vdoc-text="${CSS.escape(nodeId)}"]`
-            );
-            if (!sourceNode) return;
-            sourceNode.innerHTML = semanticInnerHtml(renderedNode);
-            sourceNode.className = renderedNode.className;
-            sourceNode.removeAttribute('data-vdoc-editor-selected');
-            for (const attribute of [...renderedNode.attributes]) {
-                if (attribute.name === 'contenteditable'
-                    || attribute.name === 'spellcheck'
-                    || attribute.name === 'data-vdoc-editor-selected') continue;
-                sourceNode.setAttribute(attribute.name, attribute.value);
-            }
-        });
-        setCurrentSourceHtml(core.sanitizeHtml(sourceTemplate.innerHTML));
+    function scheduleEditSnapshot(delay = 2000) {
+        window.clearTimeout(state.renderUpdateTimer);
+        state.renderUpdateTimer = window.setTimeout(finalizeEditBurst, delay);
+    }
+
+    function syncRenderedDocumentToSource(renderedNodes = allRenderedTextBlocks(), options = {}) {
+        queueRenderedNodesUpdate(renderedNodes, options);
         state.document.manifest.styleDependencies = [...state.usedAdvancedStyleIds];
         state.document.manifest.embeddedStyles = [...state.usedAdvancedStyleIds]
             .map((styleId) => styleLibrary.get(styleId))
             .filter(Boolean);
-        markDirty();
-        captureSnapshot();
-        renderOutline();
+        markDirty({ coalesce: true });
     }
 
     function insertImage() {
@@ -2583,7 +2562,9 @@ ${preview.css}
         }
 
         state.usedAdvancedStyleIds.add(style.id);
-        syncRenderedDocumentToSource();
+        syncRenderedDocumentToSource(blocks, {
+            attributes: useBlock ? ['class', 'data-vdoc-style'] : [],
+        });
         const rootStyle = getRenderRoot()?.querySelector('style');
         if (rootStyle) rootStyle.textContent = buildDocumentStyle();
         closeStyleLibrary();
@@ -2640,7 +2621,7 @@ ${preview.css}
         document.querySelector('.outline-tabs').hidden = false;
         elements['outline-headings-view'].hidden = false;
         elements['outline-paragraphs-view'].hidden = true;
-        const items = core.extractOutline(state.document?.source.html || '');
+        const items = core.extractOutline(parsedDocument().html);
         const headings = items.filter((item) => item.kind === 'heading');
         const paragraphs = items.filter((item) => item.kind === 'paragraph' && item.text);
         elements['outline-count'].textContent = `${headings.length} 节`;
@@ -2728,7 +2709,7 @@ ${preview.css}
     height: 100%;
 }
 ${documentCssForShadow()}
-${slide.css || ''}
+${parsedSlide(slide).css}
 
 /* 必须位于分页自定义 CSS 之后，保证预览始终冻结在初始帧。 */
 .slide-thumbnail-stage *,
@@ -2748,7 +2729,7 @@ svg set {
 `;
         const stage = document.createElement('span');
         stage.className = 'slide-thumbnail-stage';
-        stage.innerHTML = slide.html || '';
+        stage.innerHTML = parsedSlide(slide).html;
         root.append(style, stage);
 
         stage.querySelectorAll('[contenteditable]').forEach((node) =>
@@ -2804,7 +2785,7 @@ svg set {
             const title = document.createElement('span');
             title.className = 'slide-nav-title';
             const template = document.createElement('template');
-            template.innerHTML = slide.html;
+            template.innerHTML = parsedSlide(slide).html;
             title.textContent = slide.name
                 || template.content.textContent?.trim().slice(0, 42)
                 || `第 ${index + 1} 页`;
@@ -2822,28 +2803,69 @@ svg set {
         });
         state.slideThumbnailObserver.observe(elements['slide-navigator']);
     }
-
     function selectSlide(index) {
         const slides = state.document?.source?.slides || [];
         if (!slides[index] || index === state.activeSlideIndex) return false;
-        syncContinuousStructureToSource();
+
+        if (state.mode === 'render') {
+            finalizeEditBurst();
+        }
+
+        // 切页是一个严格事务：源码编辑器中的缓冲区属于旧 activeSlide，
+        // 必须在改变索引前提交。渲染面无需在此提交——文本、结构与格式
+        // 编辑都已在各自事件中定向写入源码，切页不再触碰运行时 DOM。
+        const sourceMode = state.mode === 'html' || state.mode === 'css';
+        if (sourceMode && applySourceChanges(false) === false) return false;
+
         state.activeSlideIndex = index;
         state.activeEditableBlock = null;
         state.selectionRange = null;
+        state.selectionText = '';
+        state.selectionBlockIds = [];
+        state.explicitBlockSelection = false;
         renderDocument();
+
+        // 源码面切页后必须立即替换整个编辑缓冲区，不能让上一页内容
+        // 在新 activeSlideIndex 下继续存在。
+        if (sourceMode) refreshSourceEditorForActiveSlide();
+        return true;
+    }
+
+    function refreshSourceEditorForActiveSlide() {
+        if (state.mode !== 'html' && state.mode !== 'css') return;
+        setSourceValue(state.sourceMode === 'html'
+            ? currentSourceHtml()
+            : currentSourceCss());
+        window.clearTimeout(state.sourceEditorTimer);
+        window.setTimeout(() => {
+            state.sourceEditor?.refresh();
+            validateSource();
+            refreshSourceColorMarks();
+        }, 0);
+    }
+    function commitActiveSlideBeforeNavigation() {
+        if (state.mode === 'html' || state.mode === 'css') {
+            return applySourceChanges(false) !== false;
+        }
+        finalizeEditBurst();
         return true;
     }
 
     function addSlide() {
-        if (!isSlideDeck()) return false;
-        syncContinuousStructureToSource();
+        if (!isSlideDeck() || !commitActiveSlideBeforeNavigation()) return false;
         state.document.source.slides.push(
             core.createSlide({}, state.document.source.slides.length)
         );
         state.activeSlideIndex = state.document.source.slides.length - 1;
+        state.activeEditableBlock = null;
+        state.selectionRange = null;
+        state.selectionText = '';
+        state.selectionBlockIds = [];
+        state.explicitBlockSelection = false;
         markDirty();
         captureSnapshot();
         renderDocument();
+        refreshSourceEditorForActiveSlide();
         return true;
     }
 
@@ -2854,13 +2876,18 @@ svg set {
             showToast('演示至少需要保留一页。');
             return false;
         }
+        if (!commitActiveSlideBeforeNavigation()) return false;
         slides.splice(state.activeSlideIndex, 1);
         state.activeSlideIndex = Math.min(state.activeSlideIndex, slides.length - 1);
         state.activeEditableBlock = null;
         state.selectionRange = null;
+        state.selectionText = '';
+        state.selectionBlockIds = [];
+        state.explicitBlockSelection = false;
         markDirty();
         captureSnapshot();
         renderDocument();
+        refreshSourceEditorForActiveSlide();
         return true;
     }
 
@@ -2872,8 +2899,10 @@ svg set {
     function updateMetrics() {
         const template = document.createElement('template');
         template.innerHTML = isSlideDeck()
-            ? state.document.source.slides.map((slide) => slide.html).join('\n')
-            : state.document?.source.html || '';
+            ? state.document.source.slides
+                .map((slide) => parsedSlide(slide).html)
+                .join('\n')
+            : parsedDocument().html;
         const text = template.content.textContent || '';
         const compact = text.replace(/\s/g, '');
         const words = (text.match(/[\p{L}\p{N}]+/gu) || []).length;
@@ -2882,264 +2911,48 @@ svg set {
         elements['character-count'].textContent = `${compact.length} 字符`;
     }
 
-    async function createEditor(documentModel = null, metadata = {}) {
-        const generation = state.documentGeneration += 1;
-        state.loading = true;
-        elements['loading-state'].hidden = false;
-        updateIdentity();
-        try {
-            // 打开旧工程必须保持无副作用。依赖升级不能位于载入关键路径，
-            // 否则单个异常历史节点会阻止整个文档进入渲染界面。
-            const nextDocument = documentModel
-                ? core.normalizeDocument(documentModel)
-                : core.createDocument();
-            if (generation !== state.documentGeneration) return false;
-            state.document = nextDocument;
-            state.currentPath = metadata.filePath || null;
-            const projectExtension = core.extensionForKind(state.document.manifest.scene.kind);
-            const fallbackName = state.document.manifest.scene.kind === core.PROJECT_KINDS.SLIDE_DECK
-                ? '未命名演示.vpptx'
-                : '未命名文稿.vdocx';
-            state.currentName = metadata.name || state.document.manifest.title || fallbackName;
-            if (!state.currentName.toLowerCase().endsWith(projectExtension)) {
-                state.currentName = `${state.currentName.replace(/\.[^.]+$/, '')}${projectExtension}`;
-            }
-            state.checkpoints = [...state.document.checkpoints];
-            state.documentRevision = 0;
-            state.previewRevision = -1;
-            state.previewResult = null;
-            const embeddedStyles = Array.isArray(state.document.manifest.embeddedStyles)
-                ? state.document.manifest.embeddedStyles
-                : [];
-            embeddedStyles.forEach((style) => {
-                styleLibrary.register(style, {
-                    packId: `document.${state.document.manifest.id}`,
-                    conflict: 'replace',
-                });
-            });
-            state.usedAdvancedStyleIds = new Set(
-                Array.isArray(state.document.manifest.styleDependencies)
-                    ? state.document.manifest.styleDependencies.filter((styleId) => styleLibrary.get(styleId))
-                    : []
-            );
-            state.ready = true;
-            state.activeSlideIndex = 0;
-            state.selectionRange = null;
-            state.selectionText = '';
-            state.selectionBlockIds = [];
-            state.explicitBlockSelection = false;
-            state.blockSelectionAnchorId = null;
-            state.history = [];
-            state.historyIndex = -1;
-            elements['welcome-state'].hidden = true;
-            elements['document-workspace'].hidden = false;
-            const presentation = isSlideDeck();
-            elements['read-mode-btn'].querySelector('span').textContent =
-                presentation ? '放映预览' : '阅读预览';
-            elements['export-flow-html-btn'].title =
-                presentation ? '导出单文件演示 HTML' : '导出连续流语义 HTML';
-            elements['export-paged-html-btn'].title =
-                presentation ? '导出单文件演示 HTML' : '导出逐页富文档 HTML';
-            elements['export-paged-html-btn'].hidden = presentation;
-            renderDocument();
-            switchMode('render');
-            captureSnapshot();
-            markSaved();
-            renderLineage();
-            showToast(documentModel ? 'VDOCX 已展开' : '共笔新稿已建立', 'success');
-            return true;
-        } finally {
-            if (generation === state.documentGeneration) {
-                state.loading = false;
-                elements['loading-state'].hidden = true;
-                updateIdentity();
-            }
-        }
+    function createEditor(documentModel = null, metadata = {}) {
+        return sessionController.createEditor(documentModel, metadata);
     }
 
-    async function openResult(result) {
-        if (!result?.success) return;
-        if (result.kind === 'imported') {
-            const title = String(result.name || '导入文稿').replace(/\.[^.]+$/, '');
-            const isPresentation = result.importedKind === 'pptx';
-            const model = core.createDocument({
-                title,
-                kind: isPresentation ? core.PROJECT_KINDS.SLIDE_DECK : undefined,
-                html: isPresentation ? undefined : result.html,
-                slides: isPresentation ? result.slides : undefined,
-                page: isPresentation ? result.page : undefined,
-            });
-            model.manifest.import = result.importMetadata || {
-                sourceFormat: result.importedKind,
-                sourceName: result.name,
-            };
-            const projectType = isPresentation ? 'VPPTX' : 'VDOCX';
-            await createEditor(model, {
-                filePath: null,
-                name: `${title}${isPresentation ? '.vpptx' : '.vdocx'}`,
-                imported: true,
-            });
-            markDirty();
-            const warningCount = model.manifest.import?.warnings?.length || 0;
-            showToast(
-                warningCount
-                    ? `已导入 ${result.importedKind.toUpperCase()} · ${warningCount} 条转换提示`
-                    : `已导入 ${result.importedKind.toUpperCase()}，请保存为 ${projectType}`,
-                warningCount ? 'info' : 'success',
-                4200
-            );
-            return;
-        }
-
-        const bytes = Uint8Array.from(result.bytes || []);
-        const model = core.parse(bytes);
-        await createEditor(model, result);
+    function openResult(result, intent = null) {
+        return sessionController.openResult(result, intent);
     }
 
-    async function chooseOpen() {
-        await runAfterUnsavedDecision('打开另一份文档前，可以保存当前修改，或舍弃这些修改。', async () => {
-            try {
-                await openResult(await api.chooseOpen());
-                await renderRecentDocuments();
-            } catch (error) {
-                showToast(`打开失败：${error.message}`, 'error', 5000);
-            }
-        });
+    function chooseOpen() {
+        return sessionController.chooseOpen();
     }
 
-    async function chooseImport() {
-        await runAfterUnsavedDecision(
-            '导入文档会建立一份新的 VDOCX 文稿。可以先保存当前修改，或舍弃这些修改。',
-            async () => {
-                try {
-                    const result = await api.chooseImport();
-                    await openResult(result);
-                    if (result?.success) await renderRecentDocuments();
-                } catch (error) {
-                    showToast(`导入失败：${error.message}`, 'error', 5000);
-                }
-            }
-        );
+    function chooseImport() {
+        return sessionController.chooseImport();
     }
 
-    async function openPath(filePath) {
-        await runAfterUnsavedDecision('载入另一份文档前，可以保存当前修改，或舍弃这些修改。', async () => {
-            try {
-                await openResult(await api.readPath(filePath));
-            } catch (error) {
-                showToast(`载入失败：${error.message}`, 'error', 5000);
-            }
-        });
+    function openPath(filePath) {
+        return sessionController.openPath(filePath);
     }
 
-    async function saveDocument(saveAs = false) {
-        if (!state.ready || state.saving) return false;
-        if (state.mode === 'html' || state.mode === 'css') {
-            if (applySourceChanges(false) === false) return false;
-        }
-        const generation = state.documentGeneration;
-        const savedRevision = state.documentRevision;
-        state.saving = true;
-        updateIdentity();
-        try {
-            state.document.checkpoints = state.checkpoints;
-            state.document.manifest.styleDependencies = [...state.usedAdvancedStyleIds];
-            state.document.manifest.embeddedStyles = [...state.usedAdvancedStyleIds]
-                .map((styleId) => styleLibrary.get(styleId))
-                .filter(Boolean);
-            const bytes = new TextEncoder().encode(core.serialize(state.document));
-            const result = await api.save({
-                filePath: state.currentPath,
-                suggestedName: state.currentName,
-                saveAs,
-                bytes,
-            });
-            if (!result?.success || generation !== state.documentGeneration) return false;
-            state.currentPath = result.filePath;
-            state.currentName = result.name;
-            if (state.documentRevision === savedRevision) markSaved();
-            else updateIdentity();
-            await renderRecentDocuments();
-            showToast(`已保存 · ${result.name}`, 'success');
-            return true;
-        } catch (error) {
-            showToast(`保存失败：${error.message}`, 'error', 5000);
-            return false;
-        } finally {
-            state.saving = false;
-            updateIdentity();
-        }
+    function saveDocument(saveAs = false) {
+        return sessionController.saveDocument(saveAs);
     }
 
     function persistCheckpointToFile(reason = '刻点') {
-        if (!state.ready || !state.document) return Promise.resolve(false);
-        const generation = state.documentGeneration;
-
-        // 刻点元数据需要进入文件，但不能递增正文 revision：
-        // pending PR 的 baseRevision 依赖该值，若提交刻点本身增加 revision，
-        // 随后的批准会被误判为正文修订冲突。
-        state.document.checkpoints = state.checkpoints;
-        state.dirty = true;
-        updateIdentity();
-
-        state.checkpointSaveQueue = state.checkpointSaveQueue
-            .catch(() => false)
-            .then(async () => {
-                while (state.saving && generation === state.documentGeneration) {
-                    await new Promise((resolve) => window.setTimeout(resolve, 40));
-                }
-                if (generation !== state.documentGeneration) return false;
-                const saved = await saveDocument(false);
-                if (!saved) {
-                    showToast(`${reason}已建立，但自动保存到文件失败`, 'error', 5000);
-                }
-                return saved;
-            });
-        return state.checkpointSaveQueue;
+        return sessionController.persistCheckpoint(reason);
     }
 
     function requestUnsavedDecision(message) {
-        if (!state.dirty) return Promise.resolve('discard');
-        if (state.unsavedResolver) {
-            return Promise.resolve('cancel');
-        }
-        elements['unsaved-dialog-message'].textContent = message;
-        elements['unsaved-document-name'].textContent = state.currentName;
-        elements['unsaved-dialog'].hidden = false;
-        return new Promise((resolve) => {
-            state.unsavedResolver = resolve;
-        });
+        return sessionController.requestUnsavedDecision(message);
     }
 
     function resolveUnsavedDecision(decision) {
-        const resolve = state.unsavedResolver;
-        if (!resolve) return;
-        state.unsavedResolver = null;
-        elements['unsaved-dialog'].hidden = true;
-        resolve(decision);
+        return sessionController.resolveUnsavedDecision(decision);
     }
 
-    async function runAfterUnsavedDecision(message, action) {
-        if (!state.dirty) return action();
-        const decision = await requestUnsavedDecision(message);
-        if (decision === 'cancel') return false;
-        if (decision === 'save' && !await saveDocument(false)) return false;
-        return action();
+    function runAfterUnsavedDecision(message, action) {
+        return sessionController.runAfterUnsavedDecision(message, action);
     }
 
-    async function renderRecentDocuments() {
-        let recent = [];
-        try {
-            recent = await api.listRecent();
-        } catch {}
-        elements['recent-documents'].replaceChildren(...recent.slice(0, 6).map((item) => {
-            const button = document.createElement('button');
-            button.className = 'recent-document';
-            button.textContent = item.name;
-            button.title = item.path;
-            button.addEventListener('click', () => openPath(item.path));
-            return button;
-        }));
+    function renderRecentDocuments() {
+        return sessionController.renderRecentDocuments();
     }
 
     async function loadSystemFonts() {
@@ -3175,6 +2988,7 @@ svg set {
             : '安全审查已关闭；点击立即重新开启';
         toggle.querySelector('span').textContent = next ? '安全审查' : '审查已关闭';
         if (!options.silent) {
+            finalizeEditBurst();
             disposeSlideRuntime();
             renderDocument();
             showToast(
@@ -3368,14 +3182,14 @@ svg set {
 
     function prSourceFor(proposal) {
         const sourceKind = String(proposal.sourceKind || 'html');
+        if (isSlideDeck() && sourceKind === 'deck-css') {
+            return state.document?.source?.deckCss || '';
+        }
         if (isSlideDeck() && proposal.slideIndex !== null && proposal.slideIndex !== undefined) {
             const slide = state.document?.source?.slides?.[Number(proposal.slideIndex)];
-            if (!slide) return '';
-            if (sourceKind === 'css') return slide.css || '';
-            if (sourceKind === 'script') return slide.script || '';
-            return slide.html || '';
+            return slide?.source || '';
         }
-        return sourceKind === 'css' ? currentSourceCss() : currentSourceHtml();
+        return sourceKind === 'deck-css' ? currentSourceCss() : currentSourceHtml();
     }
 
     function elementChildren(node) {
@@ -3534,7 +3348,9 @@ ${safeCss}
             );
             if (sourceKind === 'html' && applied.success) {
                 const documentCss = isSlideDeck()
-                    ? state.document?.source?.slides?.[Number(proposal.slideIndex)]?.css || ''
+                    ? core.splitSlideSource(
+                        state.document?.source?.slides?.[Number(proposal.slideIndex)]?.source || ''
+                    ).css
                     : currentSourceCss();
                 renderHtmlIslandDiff(renderDiff, beforeSource, applied.source, documentCss);
             } else {
@@ -3568,7 +3384,7 @@ ${safeCss}
 
     function textFromProposal(proposal) {
         const template = document.createElement('template');
-        template.innerHTML = String(proposal.html || '');
+        template.innerHTML = String(proposal.source || '');
         return template.content.textContent?.trim()
             || proposal.name
             || proposal.type
@@ -3784,6 +3600,7 @@ ${safeCss}
     }
 
     async function confirmLineageRestore() {
+        finalizeEditBurst();
         const target = lineageRecordById(state.pendingRestoreRecordId);
         if (!target?.snapshot) {
             cancelLineageRestore();
@@ -3868,6 +3685,7 @@ ${safeCss}
 
     async function createCheckpoint(event) {
         event.preventDefault();
+        finalizeEditBurst();
         const name = elements['checkpoint-name-input'].value.trim();
         if (!name) return;
         state.checkpoints.unshift({
@@ -4191,7 +4009,15 @@ ${safeCss}
             const modifier = event.ctrlKey || event.metaKey;
             const key = event.key.toLowerCase();
             const formControl = event.target?.closest?.('input, textarea, select, .CodeMirror');
-            if (modifier && key === 'a' && state.ready && state.mode === 'render' && !formControl) {
+            if (event.key === 'Backspace'
+                && !event.defaultPrevented
+                && state.ready
+                && state.mode === 'render'
+                && state.explicitBlockSelection
+                && !formControl) {
+                event.preventDefault();
+                deleteExplicitBlockSelection();
+            } else if (modifier && key === 'a' && state.ready && state.mode === 'render' && !formControl) {
                 event.preventDefault();
                 selectEntireRenderedDocument();
             } else if (modifier && key === 's') {
@@ -4269,6 +4095,14 @@ ${safeCss}
             await persistCheckpointToFile('AI 刻点');
         });
         window.addEventListener('beforeunload', () => {
+            finalizeEditBurst();
+            state.renderSurfaceAbortController?.abort();
+            if (state.compositionEnterFrame !== null) {
+                window.cancelAnimationFrame(state.compositionEnterFrame);
+            }
+            if (state.formattingSyncFrame !== null) {
+                window.cancelAnimationFrame(state.formattingSyncFrame);
+            }
             disposeSlideRuntime();
             state.pageObserver?.disconnect();
             state.slideThumbnailObserver?.disconnect();
@@ -4285,7 +4119,9 @@ ${safeCss}
     }
 
     async function initialize() {
-        if (!api || !core || !styleLibrary || !pagination
+        if (!api || !core || !styleLibrary || !pagination || !asyncModule
+            || !runtimeModule || !sourceEditorModule || !sessionModule
+            || !sourceEditorController || !sessionController
             || !window.ScriptoriumVisibility || !window.ScriptoriumAgentModule) {
             throw new Error('Scriptorium 原生文档内核或模块未载入。');
         }
@@ -4314,7 +4150,6 @@ ${safeCss}
             createVersionSnapshot,
             renderLineage,
             persistCheckpoint: persistCheckpointToFile,
-            syncRenderedToSource: syncContinuousStructureToSource,
             selectSlide,
         });
         window.ScriptoriumAgent = state.agentApi;

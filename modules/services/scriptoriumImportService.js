@@ -7,7 +7,7 @@ const JSZip = require('jszip');
 const cheerio = require('cheerio');
 const scriptoriumPptxImportService = require('./scriptoriumPptxImportService');
 
-const IMPORTER_VERSION = 3;
+const IMPORTER_VERSION = 4;
 const SUPPORTED_EXTENSIONS = new Set([
     '.html', '.htm', '.md', '.markdown', '.txt', '.rtf', '.docx', '.pptx',
 ]);
@@ -143,6 +143,62 @@ function firstXmlElement(source, localName) {
     return match ? { attributes: match[1], value: xmlAttribute(match[1], 'w:val') } : null;
 }
 
+function docxLengthToCss(rawValue) {
+    const value = Number(rawValue);
+    if (!Number.isFinite(value) || value === 0) return '';
+    return `${Number((value / 20).toFixed(3))}pt`;
+}
+
+function docxCharacterIndentToCss(rawValue) {
+    const value = Number(rawValue);
+    if (!Number.isFinite(value) || value === 0) return '';
+    return `${Number((value / 100).toFixed(3))}em`;
+}
+
+function parseDocxParagraphFormat(paragraphProperties) {
+    const alignmentValue = firstXmlElement(paragraphProperties, 'jc')?.value.toLowerCase() || '';
+    const alignment = {
+        left: 'left',
+        start: 'start',
+        center: 'center',
+        right: 'right',
+        end: 'end',
+        both: 'justify',
+        distribute: 'justify',
+        thaiDistribute: 'justify',
+    }[alignmentValue] || '';
+
+    const indentation = firstXmlElement(paragraphProperties, 'ind')?.attributes || '';
+    const firstLineChars = xmlAttribute(indentation, 'w:firstLineChars');
+    const hangingChars = xmlAttribute(indentation, 'w:hangingChars');
+    const firstLine = xmlAttribute(indentation, 'w:firstLine');
+    const hanging = xmlAttribute(indentation, 'w:hanging');
+    const textIndentExplicit = /\bw:(?:firstLineChars|hangingChars|firstLine|hanging)=/i
+        .test(indentation);
+    let textIndent = '';
+    if (firstLineChars) textIndent = docxCharacterIndentToCss(firstLineChars);
+    else if (hangingChars) {
+        const value = docxCharacterIndentToCss(hangingChars);
+        textIndent = value ? `-${value}` : '';
+    } else if (firstLine) textIndent = docxLengthToCss(firstLine);
+    else if (hanging) {
+        const value = docxLengthToCss(hanging);
+        textIndent = value ? `-${value}` : '';
+    }
+
+    return {
+        textAlign: alignment,
+        textIndent,
+        textIndentExplicit,
+        marginLeft: docxLengthToCss(
+            xmlAttribute(indentation, 'w:start') || xmlAttribute(indentation, 'w:left')
+        ),
+        marginRight: docxLengthToCss(
+            xmlAttribute(indentation, 'w:end') || xmlAttribute(indentation, 'w:right')
+        ),
+    };
+}
+
 function parseDocxStyles(stylesXml) {
     const styles = new Map();
     const pattern = /<w:style\b([^>]*)>([\s\S]*?)<\/w:style>/gi;
@@ -151,11 +207,15 @@ function parseDocxStyles(stylesXml) {
         if (xmlAttribute(match[1], 'w:type') !== 'paragraph') continue;
         const id = xmlAttribute(match[1], 'w:styleId');
         if (!id) continue;
+        const paragraphProperties = match[2].match(
+            /<w:pPr\b[^>]*>([\s\S]*?)<\/w:pPr>/i
+        )?.[1] || '';
         styles.set(id, {
             id,
             name: firstXmlElement(match[2], 'name')?.value || id,
             basedOn: firstXmlElement(match[2], 'basedOn')?.value || '',
             outlineLevel: Number.parseInt(firstXmlElement(match[2], 'outlineLvl')?.value, 10),
+            paragraphFormat: parseDocxParagraphFormat(paragraphProperties),
         });
     }
     return styles;
@@ -189,6 +249,27 @@ function resolveStyleHeadingLevel(styleId, styles, visited = new Set()) {
         || resolveStyleHeadingLevel(style.basedOn, styles, visited);
 }
 
+function mergeParagraphFormats(base = {}, override = {}) {
+    const meaningful = (format) => Object.fromEntries(
+        Object.entries(format).filter(([key, value]) =>
+            value || (key === 'textIndentExplicit' && value === true)
+        )
+    );
+    return {
+        ...meaningful(base),
+        ...meaningful(override),
+    };
+}
+
+function resolveStyleParagraphFormat(styleId, styles, visited = new Set()) {
+    if (!styleId || visited.has(styleId)) return {};
+    visited.add(styleId);
+    const style = styles.get(styleId);
+    if (!style) return {};
+    const inherited = resolveStyleParagraphFormat(style.basedOn, styles, visited);
+    return mergeParagraphFormats(inherited, style.paragraphFormat);
+}
+
 function paragraphText(paragraphXml) {
     const parts = [];
     const pattern = /<w:(t|tab|br)\b[^>]*?(?:\/>|>([\s\S]*?)<\/w:\1>)/gi;
@@ -211,6 +292,72 @@ function hasExplicitDocxPageBreak(paragraphXml) {
 
 function normalizeComparableText(value) {
     return String(value || '').replace(/\s+/g, '').trim();
+}
+
+function leadingTabCount(value) {
+    return String(value || '').match(/^\t+/)?.[0].length || 0;
+}
+
+function removeLeadingTabsFromElement(element, count) {
+    let remaining = Math.max(0, Number(count) || 0);
+    const visit = (node) => {
+        if (!node || remaining <= 0) return;
+        if (node.type === 'text') {
+            const match = String(node.data || '').match(/^\t+/);
+            if (!match) return;
+            const removed = Math.min(remaining, match[0].length);
+            node.data = match[0].slice(removed) + String(node.data || '').slice(match[0].length);
+            remaining -= removed;
+            return;
+        }
+        for (const child of node.children || []) {
+            if (remaining <= 0) break;
+            if (child.type === 'text' && !String(child.data || '').length) continue;
+            visit(child);
+            if (child.type === 'text' && String(child.data || '').replace(/^\t+/, '').length) break;
+        }
+    };
+    visit(element);
+    return count - remaining;
+}
+
+function isNaturalLeftAlignedDocxParagraph(paragraph) {
+    const format = paragraph.paragraphFormat || {};
+    return !paragraph.headingLevel
+        && !paragraph.hasNumbering
+        && !paragraph.hasLeadingWhitespace
+        && ['', 'left', 'start', 'justify'].includes(format.textAlign || '');
+}
+
+function applyDominantDocxTextIndent(paragraphs) {
+    const frequencies = new Map();
+    paragraphs.forEach((paragraph) => {
+        const format = paragraph.paragraphFormat || {};
+        if (!isNaturalLeftAlignedDocxParagraph(paragraph) || !format.textIndent) {
+            return;
+        }
+        frequencies.set(format.textIndent, (frequencies.get(format.textIndent) || 0) + 1);
+    });
+    const dominant = [...frequencies.entries()]
+        .sort((left, right) => right[1] - left[1])[0];
+    // 少量特殊段落不能定义整篇正文的排版习惯。真实长文中至少三个
+    // 一致缩进才作为缺省正文缩进，显式零缩进仍保持无缩进。
+    if (!dominant || dominant[1] < 3) return paragraphs;
+
+    paragraphs.forEach((paragraph) => {
+        const format = paragraph.paragraphFormat || {};
+        if (!isNaturalLeftAlignedDocxParagraph(paragraph)
+            || format.textIndentExplicit
+            || format.textIndent) {
+            return;
+        }
+        paragraph.paragraphFormat = {
+            ...format,
+            textIndent: dominant[0],
+            textIndentInferred: true,
+        };
+    });
+    return paragraphs;
 }
 
 function parseDocxParagraphs(documentXml, styles) {
@@ -239,18 +386,33 @@ function parseDocxParagraphs(documentXml, styles) {
             pendingPageBreak ||= pageBreak;
             continue;
         }
+        const inheritedFormat = resolveStyleParagraphFormat(styleId, styles);
+        const directFormat = parseDocxParagraphFormat(paragraphProperties);
+        const tabsAtStart = leadingTabCount(text);
+        const paragraphFormat = mergeParagraphFormats(inheritedFormat, directFormat);
+        // Word 的段首 w:tab 是显式排版操作。HTML 会折叠它，使其既不可见又
+        // 阻断编辑器的段首判断，因此转换为稳定的 CSS 首行缩进。
+        if (tabsAtStart && !paragraphFormat.textIndentExplicit) {
+            paragraphFormat.textIndent = `${tabsAtStart * 2}em`;
+            paragraphFormat.textIndentExplicit = true;
+            paragraphFormat.textIndentFromLeadingTabs = true;
+        }
         paragraphs.push({
             text,
             comparableText: normalizeComparableText(text),
+            leadingTabCount: tabsAtStart,
+            hasLeadingWhitespace: /^[\s\u00a0\u3000]/u.test(text),
+            hasNumbering: /<w:numPr\b/i.test(paragraphProperties),
             headingLevel: explicitHeadingLevel
                 || resolveStyleHeadingLevel(styleId, styles)
                 || headingLevelFromText(text),
+            paragraphFormat,
             pageBreakBefore: pendingPageBreak || /<w:pageBreakBefore\b/i.test(xml),
             pageBreakAfter: pageBreak && !/<w:pageBreakBefore\b/i.test(xml),
         });
         pendingPageBreak = false;
     }
-    return paragraphs;
+    return applyDominantDocxTextIndent(paragraphs);
 }
 
 function buildDocxStyleMap(styles) {
@@ -289,9 +451,31 @@ function applyDocxParagraphSemantics(html, paragraphs) {
 
         const semantic = paragraphs[matchIndex];
         paragraphIndex = matchIndex + 1;
+        if (semantic.leadingTabCount) {
+            removeLeadingTabsFromElement(element, semantic.leadingTabCount);
+        }
         if (semantic.headingLevel && !/^(?:li|blockquote)$/i.test(element.tagName)) {
             element.tagName = `h${semantic.headingLevel}`;
             element.name = element.tagName;
+        }
+        const format = semantic.paragraphFormat || {};
+        const inferredIndentAllowed = !/^(?:li|blockquote)$/i.test(element.tagName);
+        const declarations = [
+            format.textAlign ? `text-align:${format.textAlign}` : '',
+            format.textIndent && (!format.textIndentInferred || inferredIndentAllowed)
+                ? `text-indent:${format.textIndent}`
+                : '',
+            format.marginLeft ? `margin-left:${format.marginLeft}` : '',
+            format.marginRight ? `margin-right:${format.marginRight}` : '',
+        ].filter(Boolean);
+        if (declarations.length) {
+            const existingStyle = String($(element).attr('style') || '').trim();
+            $(element).attr(
+                'style',
+                `${existingStyle}${existingStyle && !existingStyle.endsWith(';') ? ';' : ''}${
+                    declarations.join(';')
+                }`
+            );
         }
         if (semantic.pageBreakBefore) $(element).attr('data-vdoc-page-break-before', 'true');
         if (semantic.pageBreakAfter) $(element).attr('data-vdoc-page-break-after', 'true');
@@ -300,8 +484,13 @@ function applyDocxParagraphSemantics(html, paragraphs) {
 }
 
 function normalizeMammothHtml(html) {
-    return String(html || '')
-        .replace(/<p>\s*<\/p>/g, '');
+    // Mammoth 对 Word 空段落输出空的 <p></p>。保留其文档顺序，并加入 BR
+    // 作为 contenteditable 的稳定占位；带显式 w:br 的段落本身已有内容，
+    // 不会命中这里，也就不会被误标记为空白行。
+    return String(html || '').replace(
+        /<p(?:\s[^>]*)?>\s*<\/p>/gi,
+        '<p data-vdoc-empty-line="true"><br></p>'
+    );
 }
 
 async function inspectDocx(buffer) {
@@ -324,7 +513,8 @@ async function convertDocx(buffer) {
         {
             styleMap: inspection.styleMap,
             includeDefaultStyleMap: true,
-            ignoreEmptyParagraphs: true,
+            // 空段落是作者实际留下的垂直节奏，不应在语义导入时丢弃。
+            ignoreEmptyParagraphs: false,
             // Word 自动分页位置依赖原机器的字体和打印布局；导入后重新流排。
             ignoreLastRenderedPageBreaks: true,
         }
@@ -404,7 +594,13 @@ module.exports = {
     convertPlainText,
     convertRtf,
     parseDocxStyles,
+    parseDocxParagraphFormat,
+    leadingTabCount,
+    removeLeadingTabsFromElement,
+    isNaturalLeftAlignedDocxParagraph,
+    applyDominantDocxTextIndent,
     resolveStyleHeadingLevel,
+    resolveStyleParagraphFormat,
     headingLevelFromText,
     parseDocxParagraphs,
     inspectDocx,
