@@ -9,7 +9,9 @@ Scriptorium 是 VCPChat 内置的本地富文档与演示创作空间。它同�
 - **VDOCX**：连续流文稿工程，扩展名为 `.vdocx`。
 - **VPPTX**：逐页演示工程，扩展名为 `.vpptx`。
 - 原生 `.docx`、`.pptx` 是导入源；导入后应保存为对应的 VDOC 工程。
-- 工程文件当前是 UTF-8 JSON，而不是 ZIP/OOXML 容器。
+- VDOCX / VPPTX 是 VCP 自有 ZIP 容器，不是 OOXML，也不再接受旧式裸 JSON 工程。
+- 容器根目录的 `document.json` 保存文档模型与资源清单；`resources/media/` 和 `resources/fonts/` 分别保存媒体与字体二进制。
+- 内部资源使用 SHA-256 内容寻址和去重，源码只保存 `vdoc-resource://media/<sha256>` 或 `vdoc-resource://fonts/<sha256>` 短引用。
 
 > A document is a place, not a file.  
 > 文档不是一个文件，而是人类与协作者共同抵达的地方。
@@ -24,7 +26,13 @@ Scriptorium 是 VCPChat 内置的本地富文档与演示创作空间。它同�
 - HTML 与 CSS 源码编辑、格式化、诊断和即时应用。
 - 字体、字号、粗体、斜体、下划线、删除线、文字颜色、高亮、行距和对齐。
 - 跨文本块选择、全文选择和右键快捷格式栏。
-- 插入段落、标题、引文和 3 × 3 表格。
+- 插入段落、标题、引文、3 × 3 表格以及参数化 SVG 图形。
+- 图片、视频、音频和 SVG 图形使用统一视觉对象协议。
+- VDOCX 对象支持独占、左侧文字环绕、右侧文字环绕及段落锚点拖放。
+- VPPTX 对象支持自由坐标拖拽、方向键微调和置顶/置底/逐层调整。
+- 选中对象后可拖动四角手柄调整尺寸；按住 Shift 可保持原始宽高比。
+- 右键对象可打开属性检查器，事务式编辑名称、描述、尺寸、旋转和 SVG 外观。
+- 图形可直接编辑独立 SVG 源码；所有视觉对象均可附加限定在本对象内的 CSS，并在隔离 iframe 中实时预览。
 - 标题目录、段落索引、字数与字符数统计。
 - 50%–200% 缩放，以及 Ctrl/Command + 滚轮指针中心缩放。
 - 高级样式库、隔离预览、样式包导入导出和工程内嵌样式。
@@ -47,6 +55,7 @@ Scriptorium 是 VCPChat 内置的本地富文档与演示创作空间。它同�
 - VDOCX 文稿：连续流 HTML、分页 HTML、PDF。
 - VPPTX 演示：单文件可播放 HTML、逐页 PDF。
 - 演示 HTML 支持键盘翻页、底部控制条、全屏和页面内交互脚本。
+- VDOCX 与 VPPTX 导出 HTML 时，会统一尝试将 `file:` 和普通 HTTP 图片、音频转换为 `data:`，提高单文件跨平台播放能力；HTTPS 公网资源与视频保持原链接。
 - 受支持的 Anime.js / Three.js 依赖会在导出时嵌入单文件 HTML。
 
 导入是面向 Scriptorium 模型的转换，不保证对原生 Office 文件进行像素级或可逆还原。DOCX 会提取正文语义、标题和显式分页信息；PPTX 以静态页面结构进入 VPPTX。
@@ -95,7 +104,19 @@ Scriptorium 不把实时渲染 DOM 当作文档存储。
 2. 文本编辑只更新该标识对应节点的内部语义 HTML。
 3. 块级格式只同步明确允许的属性。
 4. 新增和删除结构块只修改对应源码锚点。
-5. 未被显式编辑的源码节点保持原样。
+5. 视觉对象使用稳定的 `data-vdoc-object-id` 定位；拖拽、环绕、图层和属性检查器只更新该对象。
+6. 未被显式编辑的源码节点保持原样。
+
+视觉对象采用统一语义：
+
+- `data-vdoc-object` 表示 shape、image、video、audio 或 media-group。
+- `data-vdoc-object-id` 是定向编辑所需的稳定身份。
+- `data-vdoc-object-layout` 在 VDOCX 中表示 block、float-left 或 float-right，在 VPPTX 中表示 free。
+- 参数化图形保留 `data-vdoc-shape-*` 高层参数，并同时保存可独立导出的标准 SVG。
+- 自定义 SVG 必须使用单一 `<svg>` 根；检查器会校验 XML，并移除脚本、事件属性、独立执行宿主和危险外部引用。
+- 对象附加 CSS 的原始内容保存在对象直属 `<style data-vdoc-object-style>` 中，运行规则会自动增加当前 `data-vdoc-object-id` 作用域；`:object` 可显式表示对象外壳。
+- 对象 CSS 当前只接受普通选择器规则，不接受 `@import`、媒体查询、容器查询、关键帧或其他 `@` 规则。
+- 编辑器选择框、缩放手柄、拖拽状态和落点提示只存在于编辑 ShadowRoot，不进入源码或导出文件。
 
 Agent 也不直接操作实时 DOM，而是读取和修改同一份完整源码。
 
@@ -171,6 +192,20 @@ ScriptoriumCollaborator 是 VCP 分布式服务器中的 hybrid service。它通
 
 完整参数和 VCP 工具调用示例以插件清单为准。
 
+### 字体发现与使用约定
+
+Scriptorium 不要求 Agent 通过专用“字体管理”命令应用系统字体。字体名称是 CSS 源码的一部分，推荐流程如下：
+
+1. Agent 先调用 **ListFonts**，按 `all`、`zh-CN` 或 `en` 查询当前机器真实安装的字体。
+2. 将返回的准确字体族名称直接写入完整源码的 `font-family`，并提供合适的回退字体栈。
+3. 系统字体不需要 `@font-face`、资源 ID或额外的应用命令；只要当前机器已安装，编辑、预览与导出渲染即可直接使用。
+4. 不应凭空猜测字体名称。需要指定字体时应优先查询 **ListFonts**，避免 CSS 因字体不存在而静默回退。
+5. 系统字体不具备跨机器可移植性。若需要在其他设备保持同一字形，应使用 `@font-face` 引用明确的字体文件 URL。
+6. 外部字体 URL默认保留原样；用户勾选“收纳外链”并保存后，可确认的字体文件会进入 ZIP 的 `resources/fonts/`，CSS URL会替换为 `vdoc-resource://fonts/<sha256>` 短引用。
+7. Agent 只需操作字体名称和 CSS 引用，不读取或输出字体二进制、blob URL或 base64。
+
+例如，**ListFonts** 返回 `Microsoft YaHei` 后，Agent 可以在文档级样式、演示共享 `deckCss` 或单页 `<style>` 中使用 `font-family: "Microsoft YaHei", sans-serif`。若需要嵌入外部字体，则在源码中声明 `@font-face`，再由保存侧按用户选择决定是否收纳。
+
 ### 串行调用
 
 插件支持 VCP 编号串行参数：`command1`、`command2`、`command3`……，并严格按编号执行。
@@ -190,6 +225,25 @@ ScriptoriumCollaborator 是 VCP 分布式服务器中的 hybrid service。它通
 - `AppData/ScriptoriumDocument/VPPTX`
 
 默认重名策略为 rename。overwrite 必须同时提供目标文件当前的 SHA-256 `expectedFileHash`，否则拒绝覆盖。`openAfterCreate` 只请求打开新工程；若窗口中有未保存内容，最终切换仍由人类决定。
+
+## AI 可理解的原生多媒体
+
+VDOCX 与 VPPTX 的完整 HTML 源码可以原生引用图片、视频、音频及其他 Web 多媒体内容。媒体节点、来源、内容语义和时间信息共同保留在文档真相中，使人类与 Agent 看到同一份可阅读、可编辑、可追踪的多媒体上下文。
+
+- 人类点击“插入媒体”后进入应用内模态窗，可以输入单个 `src`，也可以多选本地文件并为每项填写独立的 `description`。
+- 人类或 AI 输入的原始 `description` 同时写入媒体节点及其语义容器；`data-vdoc-description` 补充媒体类型、原生分辨率和时长等技术信息。
+- 图片和视频记录原生宽高；音频和视频记录机器可读秒数及格式化原生时长。Agent 可据此设计版式、转场、字幕、动画和交互时间轴。
+- 本地文件会直接注册到 ZIP 的 `resources/media/`，HTML 源码只保存 `vdoc-resource://media/<sha256>`，不会出现媒体 base64。
+- 外部 `file:`、VCP HTTP 和公网 HTTPS URL 默认保持原样。勾选工具栏“收纳外链”后，保存事务才尝试将可确认的媒体和字体收纳进工程。
+- 网络资源是否可收纳由响应 MIME、`Content-Disposition`、扩展名和文件头共同判定。HTML 网页、登录页、`application/octet-stream` 及其他无法确认类型的响应不收纳，继续作为通用 URL 保留。
+- 普通 `<a href>` 超链接不参与资源扫描；保存收纳逻辑只处理媒体 `src` 与 `@font-face` 字体 URL。
+- 编辑和预览期间，内部短引用映射为生命周期受控的 `blob:` URL；导出单文件 HTML/PDF 时，只在导出副本中转换为 `data:` URL，不会污染工程源码。
+- 在此之后，VDOCX 与 VPPTX 共用的 HTML 导出适配层还会扫描图片 `src` / `srcset`、`picture source`、SVG `image`、视频封面及音频源，将尚未收纳的 `file:` 和普通 HTTP 图片、音频临时内联为 `data:`。
+- HTTPS 被视为公网资源并保持原链接；视频文件不进行 Base64 内联。无法读取、类型不匹配或超过内联体积上限的资源也保留原 URL，并在导出结果中汇总提示。
+- Agent 只读取原始 URL或内部短引用，以及资源名称、MIME、大小、描述、原生尺寸和时长等结构化元数据，不读取 ZIP 二进制或 base64。
+- Agent 通过超栈追踪管线嵌入或修改媒体时，也应填写同一套 `description` 与媒体源信息字段，供后续内容、视觉、动画和审阅 Agent 延续理解。
+
+这使 VCP 原生文档中的媒体不仅能够播放，还能被人类描述、被 Agent 理解、被超栈追踪、被文脉审阅，并持续参与动画与交互编排。
 
 ## 可编程内容
 
@@ -245,7 +299,9 @@ refuse 规则覆盖 Node 模块、process/global、文件系统、进程执行�
 | [`scriptorium-async.js`](scriptorium-async.js) | latest-wins 令牌、文档上下文快照与命名串行队列 |
 | [`scriptorium-runtime.js`](scriptorium-runtime.js) | 文档岛与幻灯片可编程运行时、脚本审查及资源生命周期 |
 | [`scriptorium-source-editor.js`](scriptorium-source-editor.js) | CodeMirror 适配、源码诊断、格式化与颜色工具 |
+| [`scriptorium-export-resources.js`](scriptorium-export-resources.js) | 两类文档共用的 HTML 导出图片/音频便携化、去重、体积限制与失败诊断 |
 | [`scriptorium-session.js`](scriptorium-session.js) | 新建、打开、导入、保存、未保存决策、最近文档与刻点持久化 |
+| [`scriptorium-objects.js`](scriptorium-objects.js) | 统一视觉对象、SVG Schema/源码校验、对象作用域 CSS、文档环绕、PPT 画布拖拽、四角缩放、图层与属性事务 |
 | [`vdoc-core.js`](vdoc-core.js) | VDOC 模型、规范化、序列化和源码清理 |
 | [`scriptorium-pagination.js`](scriptorium-pagination.js) | 连续流、分页预览与分页 HTML |
 | [`scriptorium-agent.js`](scriptorium-agent.js) | 渲染侧 Agent 读取、PR、审批和版本协议 |
@@ -282,8 +338,10 @@ node --check ScriptoriumModules/scriptorium.js
 node --check ScriptoriumModules/scriptorium-async.js
 node --check ScriptoriumModules/scriptorium-runtime.js
 node --check ScriptoriumModules/scriptorium-source-editor.js
+node --check ScriptoriumModules/scriptorium-export-resources.js
 node --check ScriptoriumModules/scriptorium-session.js
 node --check ScriptoriumModules/scriptorium-agent.js
+node --check ScriptoriumModules/scriptorium-objects.js
 node --check ScriptoriumModules/vdoc-core.js
 node --check ScriptoriumModules/scriptorium-programmable-content.js
 node --check modules/ipc/docxHandlers.js
@@ -337,21 +395,45 @@ set ELECTRON_RUN_AS_NODE=
 npx electron tests/scriptorium-electron-smoke.js
 npx electron tests/scriptorium-vpptx-electron.test.js
 npx electron tests/scriptorium-cdn-localization-electron.test.js
+npx electron tests/scriptorium-export-resources-electron.test.js
 ```
 
-主冒烟测试覆盖编辑器装载、文稿创建、分页、编辑、Agent PR 审批、运行时安全和截图；截图写入 `AppData/Scriptorium/scriptorium-smoke.png`。
+主冒烟测试覆盖编辑器装载、文稿创建、分页、编辑、Agent PR 审批、运行时安全和截图；截图写入 `AppData/Scriptorium/scriptorium-smoke.png`。导出资源测试覆盖 HTTP/file 图片与音频内联、URL 去重、HTTPS/视频保留、类型不匹配诊断以及 SVG、`srcset` 和视频封面。
+
+### 视觉对象 GUI 手工验证
+
+视觉对象涉及指针捕获、Shadow DOM、缩放、分页浮动和可编程运行时竞态，自动测试只能覆盖装载和源码一致性。每轮相关修改至少手工检查：
+
+1. 在 VDOCX 中分别插入矩形、椭圆、箭头和图片。
+2. 拖到不同段落前后，检查落点指示线和撤销/重做。
+3. 切换独占、左环绕和右环绕，检查连续编辑、阅读分页、HTML 与 PDF。
+4. 右键打开属性检查器；修改后取消应完全还原，应用应只产生一个历史节点。
+5. 粘贴常见图标 SVG，检查即时预览、应用、保存重开；再输入错误 XML、`script` 和 `on*` 属性，检查诊断与清理。
+6. 为图形和媒体分别附加普通 CSS；检查 `:object`、后代选择器及隔离预览，并确认规则不影响其他对象。
+7. 在 50%、100% 和 200% 缩放下拖动四个角；检查最小尺寸、Shift 等比和松手后的单次历史提交。
+8. 在 VDOCX 缩放对象后检查文字环绕与分页重排；在 VPPTX 从左上角缩放时检查右下对边保持及坐标保存。
+9. 在 VPPTX 不同缩放比例下拖拽，检查保存后的坐标与重新打开位置。
+10. 用右键菜单逐层调整对象，检查重叠顺序、缩略图、放映 HTML 和 PDF。
+11. 检查视频/音频原生控件仍可操作，图注仍可编辑，对象空白区仍可拖动。
+12. 在带 Anime.js、Three.js 或自定义脚本的页面操作对象，检查重渲染后脚本生命周期正常恢复。
+13. 切页、切模式、保存、撤销和关闭模态窗时检查没有遗留选择框、手柄、拖拽状态或属性草稿。
+14. 打开旧工程中的 `.vdoc-media`，确认自动迁移对象身份且媒体资源短引用未被 blob URL 污染。
 
 ## Alpha 已知限制
 
-- VDOCX / VPPTX 是 VCP 自有格式，与原生 DOCX / PPTX 不二进制兼容。
+- VDOCX / VPPTX 是 VCP 自有 ZIP 格式，与原生 DOCX / PPTX 不二进制兼容。
 - Office 导入是语义或静态版式转换，不是无损往返编辑。
-- 图片资源本地化层尚未接入；工具栏“插入图片”目前只显示提示。
+- 工具栏“插入媒体”支持外部 `src` 和本地文件批量插入。本地媒体进入独立资源区；源码记录布局、原始文件信息、原生分辨率、逐项描述及音视频时长。
+- 文档环绕当前使用矩形边界和 CSS 浮动，不提供不规则 `shape-outside`、任意页面坐标或正文 z-index。
+- 当前提供四角尺寸手柄，不提供四条边的独立手柄；PPT 对象尚未提供框选、多选、组合、参考线和完整图层面板。
+- SVG 图形支持完整源码替换，但不提供可视化路径节点编辑或布尔运算；自定义 SVG 内部结构也不保证能反向映射到填充、描边等参数化 GUI。
+- 对象 CSS 为便于可靠作用域分析，暂不支持 `@` 规则、嵌套规则和关键帧；复杂动画仍应放入文档或页面完整源码。
 - 工具栏中的项目符号和编号列表按钮尚未接入编辑命令。
 - 分页器面向 Web 富文档语义，不追求 Word 排版引擎逐像素一致。
 - JavaScript 安全审查不是完整沙箱；关闭审查后不应运行不可信源码。
 - 当前工程格式版本为 `vcp-vdocx` version 1，Alpha 阶段仍可能演进。
 - 撤销栈只存在于当前窗口会话；需要长期恢复时应使用持久化文脉刻点。
-- 外部图片、媒体和字体的可移植资源打包仍需继续完善。
+- 无法确认真实文件类型的外部 URL 不会自动收纳，需要保持网络可访问或由用户改为明确的媒体/字体文件地址。
 - 大型复杂 WebGL 页面、长时间动画和第三方脚本兼容性仍需更多压力测试。
 
 ## Alpha 定位

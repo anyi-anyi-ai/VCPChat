@@ -3,12 +3,15 @@
 (() => {
     const api = window.scriptoriumAPI || window.docxAPI;
     const core = window.VDocCore;
+    const containerModule = window.VDocContainer;
     const styleLibrary = window.VDocStyleLibrary;
     const pagination = window.VDocPagination;
     const asyncModule = window.ScriptoriumAsync;
+    const exportResourcesModule = window.ScriptoriumExportResources;
     const runtimeModule = window.ScriptoriumRuntime;
     const sourceEditorModule = window.ScriptoriumSourceEditor;
     const sessionModule = window.ScriptoriumSession;
+    const objectModule = window.ScriptoriumObjects;
     const state = {
         document: null,
         currentPath: null,
@@ -77,6 +80,14 @@
         slideRuntimeIdentity: null,
         programmableContentDiagnostics: [],
         checkpointSaveQueue: Promise.resolve(),
+        documentResourceData: new Map(),
+        resourceObjectUrls: new Map(),
+        resourceResolver: null,
+        mediaLocalItems: [],
+        objectController: null,
+        lineageAgents: [],
+        lineageAvatarCache: new Map(),
+        lineageAvatarPending: new Map(),
     };
 
     const asyncCoordinator = asyncModule?.createCoordinator({
@@ -98,6 +109,7 @@
         elements,
         api,
         core,
+        containerModule,
         styleLibrary,
         asyncCoordinator,
         isSlideDeck,
@@ -119,11 +131,24 @@
             'outline-toggle-btn', 'focus-mode-btn', 'lineage-toggle-btn',
             'minimize-btn', 'maximize-btn', 'close-btn',
             'new-btn', 'new-deck-btn', 'open-btn', 'import-btn', 'save-btn', 'save-as-btn',
+            'collect-external-resources',
             'export-flow-html-btn', 'export-paged-html-btn', 'export-pdf-btn',
             'render-mode-btn', 'read-mode-btn', 'html-mode-btn', 'css-mode-btn',
             'font-family-select', 'font-size-select', 'text-color-input',
             'highlight-color-input', 'line-height-select', 'block-type-select',
             'insert-block-btn', 'insert-table-btn', 'find-btn',
+            'shape-kind-select', 'insert-shape-btn', 'object-context-menu',
+            'object-inspector-dialog', 'object-inspector-form',
+            'object-inspector-title', 'object-inspector-cancel-btn',
+            'object-name-input', 'object-description-input',
+            'object-width-input', 'object-height-input', 'object-rotation-input',
+            'object-layout-field', 'object-layout-select', 'object-rotation-field',
+            'object-shape-fields', 'object-fill-input', 'object-stroke-input',
+            'object-stroke-width-input', 'object-radius-input',
+            'object-opacity-input', 'object-dash-select',
+            'object-svg-source-input', 'object-css-source-input',
+            'object-source-diagnostics', 'object-preview-frame',
+            'object-inspector-apply-btn',
             'welcome-state', 'welcome-new-btn', 'welcome-open-btn', 'recent-documents',
             'document-workspace', 'render-host', 'page-stream', 'read-host',
             'read-page-stream', 'source-host',
@@ -147,7 +172,11 @@
             'style-preview-name', 'style-preview-description', 'style-preview-frame',
             'style-preview-targets', 'style-apply-btn', 'unsaved-dialog',
             'unsaved-dialog-message', 'unsaved-document-name', 'unsaved-cancel-btn',
-            'unsaved-discard-btn', 'unsaved-save-btn', 'checkpoint-dialog',
+            'unsaved-discard-btn', 'unsaved-save-btn', 'media-dialog', 'media-form',
+            'media-src-fields', 'media-kind-select', 'media-src-input', 'media-description-input',
+            'media-dialog-status', 'media-cancel-btn', 'media-insert-btn',
+            'media-local-select-btn', 'media-local-input', 'media-local-count',
+            'media-local-list', 'checkpoint-dialog',
             'checkpoint-name-input', 'checkpoint-note-input', 'checkpoint-cancel-btn',
             'pr-review-dialog', 'pr-review-title', 'pr-review-meta',
             'pr-review-close-btn', 'pr-render-diff', 'pr-source-diff',
@@ -408,6 +437,10 @@
         }
     }
 
+    function resolveRuntimeResources(source) {
+        return state.resourceResolver?.resolveHtml(source) || String(source || '');
+    }
+
     function currentSourceCss() {
         return isSlideDeck()
             ? state.document?.source?.deckCss || ''
@@ -552,6 +585,44 @@ ${core.formatHtml(core.ensureTextNodeIds(documentSource.html))}`;
     background-color: rgba(58, 139, 120, .12) !important;
     box-shadow: 0 0 0 5px rgba(58, 139, 120, .06) !important;
 }
+/*
+ * 对象编辑装饰仅存在于编辑 ShadowRoot。对象本身的布局属性位于源码，
+ * 选择框、拖拽光标和落点提示不会进入 VDOC 或导出结果。
+ */
+[data-vdoc-object-id] {
+    box-sizing: border-box;
+    touch-action: none;
+}
+[data-vdoc-object-id][data-vdoc-object-layout="free"] {
+    cursor: move;
+    user-select: none;
+}
+[data-vdoc-object-id][data-vdoc-object-layout^="float"],
+[data-vdoc-object-id][data-vdoc-object-layout="block"] {
+    cursor: grab;
+}
+[data-vdoc-object-id][data-vdoc-object-selected="true"] {
+    outline: 2px solid #3a8b78 !important;
+    outline-offset: 4px;
+    box-shadow: 0 0 0 6px rgba(58, 139, 120, .14) !important;
+}
+[data-vdoc-object-id][data-vdoc-object-dragging="true"] {
+    cursor: grabbing !important;
+    opacity: .84;
+}
+[data-vdoc-text][data-vdoc-object-drop="before"] {
+    box-shadow: 0 -3px 0 #3a8b78 !important;
+}
+[data-vdoc-text][data-vdoc-object-drop="after"] {
+    box-shadow: 0 3px 0 #3a8b78 !important;
+}
+[data-vdoc-object="shape"] > svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+    pointer-events: none;
+}
 .vdoc-page-tombstone {
     display: grid;
     width: var(--vdoc-page-width);
@@ -601,6 +672,55 @@ ${documentCssForShadow()}
 }
 ${surface === 'edit' ? `
 .vdoc-page { display: none !important; }
+
+/*
+ * 四角缩放手柄是纯编辑器装饰，必须位于文档 CSS 之后并使用高优先级，
+ * 避免作者针对 span、* 或 figure 子元素的规则改变命中区域。
+ */
+[data-vdoc-object-id] > [data-vdoc-object-resize-handle] {
+    position: absolute !important;
+    z-index: 2147483000 !important;
+    display: block !important;
+    width: 11px !important;
+    min-width: 11px !important;
+    max-width: none !important;
+    height: 11px !important;
+    min-height: 11px !important;
+    padding: 0 !important;
+    border: 2px solid #fff !important;
+    border-radius: 3px !important;
+    overflow: visible !important;
+    background: #3a8b78 !important;
+    box-shadow: 0 1px 5px rgba(0, 0, 0, .42) !important;
+    opacity: 1 !important;
+    pointer-events: auto !important;
+    touch-action: none !important;
+    user-select: none !important;
+}
+[data-vdoc-object-resize-handle="nw"] {
+    top: -7px !important;
+    left: -7px !important;
+    cursor: nwse-resize !important;
+}
+[data-vdoc-object-resize-handle="ne"] {
+    top: -7px !important;
+    right: -7px !important;
+    cursor: nesw-resize !important;
+}
+[data-vdoc-object-resize-handle="sw"] {
+    bottom: -7px !important;
+    left: -7px !important;
+    cursor: nesw-resize !important;
+}
+[data-vdoc-object-resize-handle="se"] {
+    right: -7px !important;
+    bottom: -7px !important;
+    cursor: nwse-resize !important;
+}
+[data-vdoc-object-id][data-vdoc-object-dragging="true"]
+    > [data-vdoc-object-resize-handle] {
+    opacity: .92 !important;
+}
 ` : ''}`;
     }
 
@@ -651,16 +771,25 @@ ${surface === 'edit' ? `
         return runtimeController.activateCurrentSlide(surface);
     }
 
+    function normalizeCurrentVisualObjects() {
+        if (!state.document || !objectModule) return false;
+        const normalized = objectModule.normalizeSource(currentSourceHtml(), isSlideDeck());
+        if (!normalized.changed) return false;
+        setCurrentSourceHtml(normalized.source);
+        return true;
+    }
+
     function renderDocument() {
         disposeSlideRuntime();
         if (!state.document) return;
         state.document = core.normalizeDocument(state.document);
+        normalizeCurrentVisualObjects();
         const root = getRenderRoot() || elements['page-stream'].attachShadow({ mode: 'open' });
         state.pageObserver?.disconnect();
         root.replaceChildren();
 
         const style = document.createElement('style');
-        style.textContent = buildDocumentStyle('edit');
+        style.textContent = resolveRuntimeResources(buildDocumentStyle('edit'));
         const runtime = document.createElement('div');
         runtime.dataset.sceneKind = state.document.manifest.scene.kind;
         runtime.style.setProperty('--vdoc-zoom', String(state.zoom / 100));
@@ -671,15 +800,19 @@ ${surface === 'edit' ? `
             const source = parsedSlide(slide);
             runtime.className = 'vdoc-runtime vdoc-slide-editor-runtime';
             runtime.dataset.slideId = slide?.id || '';
-            runtime.innerHTML = source.html;
+            runtime.innerHTML = resolveRuntimeResources(source.html);
             const slideStyle = document.createElement('style');
             slideStyle.dataset.vdocSlideStyle = slide?.id || '';
-            slideStyle.textContent = source.css;
+            slideStyle.textContent = resolveRuntimeResources(source.css);
             root.appendChild(slideStyle);
         } else {
-            pagination.renderContinuous(parsedDocument().html, runtime, {
-                ensureIds: core.ensureTextNodeIds,
-            });
+            pagination.renderContinuous(
+                resolveRuntimeResources(parsedDocument().html),
+                runtime,
+                {
+                    ensureIds: core.ensureTextNodeIds,
+                }
+            );
         }
         renderMathNodes(root);
 
@@ -692,6 +825,9 @@ ${surface === 'edit' ? `
         state.renderedTextBlocks = [...root.querySelectorAll('[data-vdoc-text]')];
         state.pendingRenderedNodes.clear();
         state.pendingRenderedAttributes.clear();
+        // 对象控制器使用捕获阶段拦截。必须先于文字选择委托注册，
+        // 否则对象上的首次 pointerdown 会先触发空白建段或文本选择。
+        state.objectController?.bindRoot(root);
         bindRenderSurface(root);
         updatePageZoomLayout(root);
         if (state.mode === 'render') {
@@ -715,16 +851,16 @@ ${surface === 'edit' ? `
             || elements['read-page-stream'].attachShadow({ mode: 'open' });
         root.replaceChildren();
         const style = document.createElement('style');
-        style.textContent = buildDocumentStyle('paged');
+        style.textContent = resolveRuntimeResources(buildDocumentStyle('paged'));
         const runtime = document.createElement('div');
         runtime.dataset.sceneKind = state.document.manifest.scene.kind;
         root.append(style, runtime);
-        const previewHtml = isSlideDeck()
+        const previewHtml = resolveRuntimeResources(isSlideDeck()
             ? state.document.source.slides.map((slide) => {
                 const source = parsedSlide(slide);
                 return `<section data-vdoc-slide data-vdoc-slide-id="${escapeHtml(slide.id)}">${source.html}<style>${source.css}</style></section>`;
             }).join('\n')
-            : parsedDocument().html;
+            : parsedDocument().html);
         state.previewResult = pagination.paginate(previewHtml, runtime, {
             ensureIds: core.ensureTextNodeIds,
             scene: core.createSceneConfig(state.document.manifest.scene),
@@ -975,6 +1111,7 @@ ${parsedDocument().html}
             }
             let html;
             let paged = false;
+            let resourceLocalization = null;
             if (isSlideDeck() && format !== 'pdf') {
                 // 演示项目不存在“连续 HTML / 分页 HTML”的语义差异：
                 // 所有 HTML 均导出为单页全屏导播器，只有 PDF 使用静态逐页版式。
@@ -992,6 +1129,17 @@ ${parsedDocument().html}
                 }
                 html = buildPagedExportHtml();
             }
+            html = state.resourceResolver?.resolveExportHtml(html) || html;
+            if (format !== 'pdf') {
+                resourceLocalization = await exportResourcesModule.localizeHtmlMedia(html, {
+                    readExternalResource: (payload) => api.readExternalResource(payload),
+                    bytesToBase64: containerModule.bytesToBase64,
+                });
+                if (!asyncCoordinator.isContextCurrent(context, { revision: true })) {
+                    return false;
+                }
+                html = resourceLocalization.html;
+            }
             const baseName = state.currentName.replace(/\.(?:vdocx|vpptx)$/i, '');
             const result = await api.exportRichDocument({
                 format,
@@ -1003,7 +1151,23 @@ ${parsedDocument().html}
                     state.document.manifest.programmableDependencies || [],
             });
             if (!result?.success || !asyncCoordinator.isContextCurrent(context)) return false;
-            showToast(`已导出 · ${result.name}`, 'success');
+            const localizedSummary = resourceLocalization?.localized
+                ? ` · 已内联 ${resourceLocalization.localized} 项图片/音频`
+                : '';
+            const retainedSummary = resourceLocalization?.retained
+                ? ` · ${resourceLocalization.retained} 项保留原 URL`
+                : '';
+            showToast(
+                `已导出 · ${result.name}${localizedSummary}${retainedSummary}`,
+                resourceLocalization?.retained ? 'info' : 'success',
+                resourceLocalization?.retained ? 5000 : 2600
+            );
+            if (resourceLocalization?.failures?.length) {
+                console.warn(
+                    '[Scriptorium] Export media localization retained external URLs:',
+                    resourceLocalization.failures
+                );
+            }
             return true;
         } catch (error) {
             showToast(`导出失败：${error.message}`, 'error', 5000);
@@ -1037,6 +1201,12 @@ ${parsedDocument().html}
                 createTextBlockAtBlankPoint(event);
                 return;
             }
+
+            // pointerdown 先于焦点和选区更新发生。直接以命中的实际文字节点
+            // 同步工具栏，使重复点击已经聚焦的块、以及点击块内不同字号的
+            // span 时，顶部字体和字号也能立即跳到当前位置。
+            state.activeEditableBlock = block;
+            scheduleFormattingControls(event.target);
             const blockId = block.dataset.vdocText;
             state.pointerSelectionAnchorId = blockId;
             state.pointerSelectingBlocks = false;
@@ -1378,24 +1548,38 @@ ${parsedDocument().html}
             .join('')}`;
     }
 
-    function firstFontFamily(fontFamily) {
+    function fontFamilies(fontFamily) {
         return String(fontFamily || '')
-            .split(',')[0]
-            .trim()
-            .replace(/^["']|["']$/g, '');
+            .split(',')
+            .map((family) => family.trim().replace(/^["']|["']$/g, ''))
+            .filter(Boolean);
+    }
+
+    function firstFontFamily(fontFamily) {
+        return fontFamilies(fontFamily)[0] || '';
     }
 
     function syncSelectClosestFont(select, fontFamily) {
         if (!select) return;
         let lookup = state.fontOptionLookup.get(select);
-        if (!lookup || lookup.size !== select.options.length) {
-            lookup = new Map([...select.options].map((option) => [
-                firstFontFamily(option.value).toLowerCase(),
-                option.value,
-            ]));
+        if (!lookup || lookup.optionCount !== select.options.length) {
+            lookup = {
+                optionCount: select.options.length,
+                values: new Map([...select.options].flatMap((option) =>
+                    fontFamilies(option.value).map((family) => [
+                        family.toLowerCase(),
+                        option.value,
+                    ])
+                )),
+            };
             state.fontOptionLookup.set(select, lookup);
         }
-        const value = lookup.get(firstFontFamily(fontFamily).toLowerCase());
+
+        // computedStyle 通常返回完整字体回退栈。首选字体不在系统列表时，
+        // 继续匹配后续实际可用字体，而不是让工具栏停留在上一个文本块。
+        const value = fontFamilies(fontFamily)
+            .map((family) => lookup.values.get(family.toLowerCase()))
+            .find((candidate) => candidate !== undefined);
         if (value !== undefined && select.value !== value) select.value = value;
     }
 
@@ -1412,11 +1596,47 @@ ${parsedDocument().html}
         select.value = options[0].option.value;
     }
 
+    function setInlineCommandControlState(command, active) {
+        document.querySelectorAll(
+            `[data-command="${command}"], [data-selection-command="${command}"]`
+        ).forEach((control) => {
+            control.classList.toggle('active', active);
+            control.setAttribute('aria-pressed', String(active));
+        });
+    }
+
+    function elementHasInlineCommand(element, command) {
+        if (!element) return false;
+        const block = element.closest?.('[data-vdoc-text]');
+        if (!block) return false;
+
+        if (command === 'bold') {
+            const weight = getComputedStyle(element).fontWeight;
+            return Number.parseFloat(weight) >= 600 || weight === 'bold';
+        }
+        if (command === 'italic') {
+            return /^(?:italic|oblique)/i.test(getComputedStyle(element).fontStyle);
+        }
+
+        const wantedDecoration = command === 'underline' ? 'underline' : 'line-through';
+        for (let current = element; current; current = current.parentElement) {
+            if (command === 'underline' && current.tagName === 'U') return true;
+            if (command === 'strikethrough'
+                && (current.tagName === 'S' || current.tagName === 'STRIKE')) return true;
+            const decoration = `${current.style?.textDecorationLine || ''} ${
+                current.style?.textDecoration || ''
+            }`;
+            if (decoration.split(/\s+/).includes(wantedDecoration)) return true;
+            if (current === block) break;
+        }
+        return false;
+    }
+
     function syncFormattingControls(target) {
         const element = target?.nodeType === Node.ELEMENT_NODE
             ? target
             : target?.parentElement;
-        const textElement = element?.closest?.('[data-vdoc-text], span, strong, em, a')
+        const textElement = element?.closest?.('[data-vdoc-text], span, strong, em, a, u, s, strike')
             || state.activeEditableBlock;
         if (!textElement) return;
 
@@ -1425,6 +1645,12 @@ ${parsedDocument().html}
         syncSelectClosestFont(elements['selection-font-family'], computed.fontFamily);
         syncSelectClosestSize(elements['font-size-select'], computed.fontSize);
         syncSelectClosestSize(elements['selection-font-size'], computed.fontSize);
+        ['bold', 'italic', 'underline', 'strikethrough'].forEach((command) => {
+            setInlineCommandControlState(
+                command,
+                elementHasInlineCommand(textElement, command)
+            );
+        });
 
         const color = cssColorToHex(computed.color);
         elements['text-color-input'].value = color;
@@ -1475,15 +1701,216 @@ ${parsedDocument().html}
         return true;
     }
 
+    function selectedTextElements(preferSaved = false) {
+        const range = selectedRange(preferSaved);
+        if (!range || range.collapsed) return [];
+        const blocks = state.explicitBlockSelection
+            ? blocksForIds()
+            : editableBlocksForRange(range);
+        const elementsInRange = [];
+        blocks.forEach((block) => {
+            const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+            for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+                if (!(node.nodeValue || '').length) continue;
+                try {
+                    if (range.intersectsNode(node)) {
+                        elementsInRange.push(node.parentElement || block);
+                    }
+                } catch {}
+            }
+        });
+        return elementsInRange.length ? elementsInRange : blocks;
+    }
+
+    function selectionHasInlineCommand(command, preferSaved = false) {
+        const targets = selectedTextElements(preferSaved);
+        return targets.length > 0
+            && targets.every((target) => elementHasInlineCommand(target, command));
+    }
+
+    function removeInlineCommandFromFragment(fragment, command) {
+        const semanticTags = {
+            bold: new Set(['B', 'STRONG']),
+            italic: new Set(['I', 'EM']),
+            underline: new Set(['U']),
+            strikethrough: new Set(['S', 'STRIKE']),
+        };
+        const styleProperty = {
+            bold: 'fontWeight',
+            italic: 'fontStyle',
+            underline: 'textDecoration',
+            strikethrough: 'textDecoration',
+        }[command];
+        const decoration = command === 'underline' ? 'underline' : 'line-through';
+
+        [...fragment.querySelectorAll('*')].reverse().forEach((node) => {
+            if (styleProperty === 'textDecoration') {
+                const lines = `${node.style.textDecorationLine || ''} ${
+                    node.style.textDecoration || ''
+                }`.split(/\s+/).filter((line) =>
+                    line && line !== decoration && line !== 'none'
+                );
+                node.style.removeProperty('text-decoration');
+                node.style.removeProperty('text-decoration-line');
+                if (lines.length) node.style.textDecorationLine = [...new Set(lines)].join(' ');
+            } else {
+                node.style[styleProperty] = '';
+            }
+            if (!node.getAttribute('style')?.trim()) node.removeAttribute('style');
+
+            if (semanticTags[command].has(node.tagName)) {
+                node.replaceWith(...node.childNodes);
+            } else if (node.tagName === 'SPAN' && !node.attributes.length) {
+                node.replaceWith(...node.childNodes);
+            }
+        });
+    }
+
+    function elementDeclaresInlineCommand(element, command) {
+        if (!element) return false;
+        const semanticTags = {
+            bold: ['B', 'STRONG'],
+            italic: ['I', 'EM'],
+            underline: ['U'],
+            strikethrough: ['S', 'STRIKE'],
+        };
+        if (semanticTags[command]?.includes(element.tagName)) return true;
+
+        if (command === 'bold') {
+            const weight = element.style.fontWeight;
+            return weight === 'bold' || Number.parseFloat(weight) >= 600;
+        }
+        if (command === 'italic') {
+            return /^(?:italic|oblique)/i.test(element.style.fontStyle);
+        }
+        const decoration = `${element.style.textDecorationLine || ''} ${
+            element.style.textDecoration || ''
+        }`;
+        return decoration.split(/\s+/).includes(
+            command === 'underline' ? 'underline' : 'line-through'
+        );
+    }
+
+    function splitElementAroundChild(parent, child) {
+        if (!parent?.parentNode || child?.parentNode !== parent) return child;
+        const before = parent.cloneNode(false);
+        const after = parent.cloneNode(false);
+        while (parent.firstChild && parent.firstChild !== child) {
+            before.appendChild(parent.firstChild);
+        }
+        while (child.nextSibling) after.appendChild(child.nextSibling);
+        const replacements = [];
+        if (before.childNodes.length) replacements.push(before);
+        replacements.push(child);
+        if (after.childNodes.length) replacements.push(after);
+        parent.replaceWith(...replacements);
+        return child;
+    }
+
+    function liftMarkerOutsideInlineCommand(marker, command, block) {
+        let commandAncestor = marker.parentElement;
+        while (commandAncestor && commandAncestor !== block
+            && !elementDeclaresInlineCommand(commandAncestor, command)) {
+            commandAncestor = commandAncestor.parentElement;
+        }
+        if (!commandAncestor || commandAncestor === block) return marker;
+
+        // marker 可能嵌在若干无关 span/a 中。逐层拆分这些中间节点，
+        // 再拆分真正声明格式的祖先，使选区脱离其继承格式，同时保留
+        // 选区前后两侧原有的 DOM 与样式。
+        while (marker.parentElement && marker.parentElement !== commandAncestor) {
+            splitElementAroundChild(marker.parentElement, marker);
+        }
+        if (marker.parentElement === commandAncestor) {
+            splitElementAroundChild(commandAncestor, marker);
+        }
+        return marker;
+    }
+
+    function removeInlineCommand(command, preferSaved = false) {
+        if (preferSaved) restoreSavedSelection();
+        const sourceRange = selectedRange(preferSaved);
+        if (!sourceRange || sourceRange.collapsed) return false;
+        const targetBlocks = state.explicitBlockSelection
+            ? blocksForIds()
+            : editableBlocksForRange(sourceRange);
+        const ranges = targetBlocks.map((block) => {
+            if (state.explicitBlockSelection) {
+                const range = document.createRange();
+                range.selectNodeContents(block);
+                return range;
+            }
+            return rangeWithinBlock(sourceRange, block);
+        }).filter(Boolean);
+        if (!ranges.length) return false;
+
+        const markers = [];
+        [...ranges].reverse().forEach((range) => {
+            const marker = document.createElement('span');
+            marker.dataset.vdocFormatRemoval = command;
+            try {
+                range.surroundContents(marker);
+            } catch {
+                marker.appendChild(range.extractContents());
+                range.insertNode(marker);
+            }
+            markers.unshift(marker);
+        });
+
+        const insertedBoundaries = markers.map((marker, index) => {
+            const block = targetBlocks[index]
+                || marker.closest('[data-vdoc-text]');
+
+            // 导入内容可能同时使用语义标签与行内样式表达同一种格式。
+            // 持续向外拆分，直到选区不再继承任何一层同类格式。
+            while (marker.parentElement && marker.parentElement !== block) {
+                const previousParent = marker.parentElement;
+                liftMarkerOutsideInlineCommand(marker, command, block);
+                if (marker.parentElement === previousParent) break;
+            }
+
+            removeInlineCommandFromFragment(marker, command);
+            const first = marker.firstChild;
+            const last = marker.lastChild;
+            if (!first || !last) {
+                marker.remove();
+                return null;
+            }
+            marker.replaceWith(...marker.childNodes);
+            return { first, last };
+        }).filter(Boolean);
+        if (!insertedBoundaries.length) return false;
+
+        const nextRange = document.createRange();
+        nextRange.setStartBefore(insertedBoundaries[0].first);
+        nextRange.setEndAfter(insertedBoundaries[insertedBoundaries.length - 1].last);
+        state.selectionRange = nextRange.cloneRange();
+        state.selectionText = nextRange.toString();
+        state.selectionBlockIds = editableBlocksForRange(nextRange)
+            .map((block) => block.dataset.vdocText)
+            .filter(Boolean);
+        const selection = currentRenderSelection();
+        selection.removeAllRanges();
+        selection.addRange(nextRange);
+
+        queueRenderedNodesUpdate(targetBlocks);
+        markDirty({ coalesce: true });
+        scheduleFormattingControls(insertedBoundaries[0].first);
+        return true;
+    }
+
     function applyInlineCommand(command, preferSaved = false) {
         const styles = {
             bold: ['fontWeight', '700'],
             italic: ['fontStyle', 'italic'],
-            underline: ['textDecoration', 'underline'],
-            strikethrough: ['textDecoration', 'line-through'],
+            underline: ['textDecorationLine', 'underline'],
+            strikethrough: ['textDecorationLine', 'line-through'],
         };
         const style = styles[command];
-        return style ? applyInlineStyle(style[0], style[1], preferSaved) : false;
+        if (!style) return false;
+        return selectionHasInlineCommand(command, preferSaved)
+            ? removeInlineCommand(command, preferSaved)
+            : applyInlineStyle(style[0], style[1], preferSaved);
     }
 
     function placeCaretAtStart(element) {
@@ -1667,6 +2094,10 @@ ${parsedDocument().html}
         // 因此可以安全序列化。仅剥离编辑器自身附加的可编辑标记。
         const clone = renderedBlock.cloneNode(true);
         restoreMathSemantics(clone);
+        clone.querySelectorAll('[data-vdoc-resource-src]').forEach((media) => {
+            media.setAttribute('src', media.dataset.vdocResourceSrc);
+            media.removeAttribute('data-vdoc-resource-src');
+        });
         [clone, ...clone.querySelectorAll(
             '[contenteditable], [spellcheck], [data-vdoc-editor-selected]'
         )].forEach((node) => {
@@ -2231,6 +2662,8 @@ ${parsedDocument().html}
     function switchMode(mode) {
         if (!state.ready) return;
         if (state.mode === 'render' && mode !== 'render') {
+            state.objectController?.closeInspector(true);
+            state.objectController?.clearSelection();
             finalizeEditBurst();
         }
         disposeSlideRuntime();
@@ -2366,7 +2799,7 @@ ${parsedDocument().html}
             scheduleFormattingControls(blocks[0]);
             return true;
         }
-        if (command === 'image') return insertImage();
+        if (command === 'image') return insertMedia();
         return false;
     }
 
@@ -2384,9 +2817,511 @@ ${parsedDocument().html}
         markDirty({ coalesce: true });
     }
 
-    function insertImage() {
-        showToast('图片资源本地化将在 VDOCX 资源层接入。');
+    function inferMediaKind(src) {
+        const normalized = String(src || '').trim().toLowerCase();
+        const dataType = normalized.match(/^data:(image|video|audio)\//)?.[1];
+        if (dataType) return dataType;
+        const pathname = normalized.split(/[?#]/, 1)[0];
+        if (/\.(?:avif|bmp|gif|ico|jpe?g|png|svg|webp|tiff?)$/i.test(pathname)) {
+            return 'image';
+        }
+        if (/\.(?:m4v|mkv|mov|mp4|mpeg|mpg|ogv|webm)$/i.test(pathname)) {
+            return 'video';
+        }
+        if (/\.(?:aac|flac|m4a|mp3|oga|ogg|opus|wav|weba|wma)$/i.test(pathname)) {
+            return 'audio';
+        }
+        return '';
+    }
+
+    function mediaNameFromSrc(src) {
+        try {
+            const pathname = new URL(src, location.href).pathname;
+            return decodeURIComponent(pathname.split('/').filter(Boolean).pop() || '');
+        } catch {
+            return String(src || '').split(/[\\/]/).pop()?.split(/[?#]/, 1)[0] || '';
+        }
+    }
+
+    function formatMediaDuration(seconds) {
+        if (!Number.isFinite(seconds) || seconds < 0) return '';
+        const milliseconds = Math.round(seconds * 1000);
+        const hours = Math.floor(milliseconds / 3600000);
+        const minutes = Math.floor((milliseconds % 3600000) / 60000);
+        const wholeSeconds = Math.floor((milliseconds % 60000) / 1000);
+        const fraction = milliseconds % 1000;
+        const clock = [
+            ...(hours ? [String(hours).padStart(2, '0')] : []),
+            String(minutes).padStart(2, '0'),
+            String(wholeSeconds).padStart(2, '0'),
+        ].join(':');
+        return `${clock}.${String(fraction).padStart(3, '0')}`;
+    }
+
+    function readMediaMetadata(kind, src, timeout = 15000) {
+        return new Promise((resolve) => {
+            const media = kind === 'image'
+                ? new Image()
+                : document.createElement(kind);
+            let settled = false;
+            const finish = (metadata) => {
+                if (settled) return;
+                settled = true;
+                window.clearTimeout(timer);
+                media.removeAttribute?.('src');
+                media.load?.();
+                resolve(metadata);
+            };
+            const timer = window.setTimeout(() => finish({ available: false }), timeout);
+
+            if (kind === 'image') {
+                media.onload = () => finish({
+                    available: true,
+                    width: media.naturalWidth,
+                    height: media.naturalHeight,
+                });
+                media.onerror = () => finish({ available: false });
+            } else {
+                media.preload = 'metadata';
+                media.onloadedmetadata = () => finish({
+                    available: true,
+                    width: kind === 'video' ? media.videoWidth : null,
+                    height: kind === 'video' ? media.videoHeight : null,
+                    duration: Number.isFinite(media.duration) ? media.duration : null,
+                });
+                media.onerror = () => finish({ available: false });
+            }
+            media.src = src;
+        });
+    }
+
+    function createMediaFigure(kind, src, metadata, description, sourceInfo = {}) {
+        const figure = document.createElement('figure');
+        figure.className = 'vdoc-media';
+        figure.dataset.vdocMedia = kind;
+        if (!src.startsWith('data:')) figure.dataset.vdocSrc = src;
+        figure.dataset.vdocSourceKind = src.startsWith(containerModule.RESOURCE_SCHEME)
+            ? 'embedded-resource'
+            : 'external-src';
+        if (sourceInfo.name) figure.dataset.vdocSourceName = sourceInfo.name;
+        if (sourceInfo.type) figure.dataset.vdocSourceType = sourceInfo.type;
+        if (Number.isFinite(sourceInfo.size)) {
+            figure.dataset.vdocSourceSize = String(sourceInfo.size);
+        }
+        figure.style.margin = '1em auto';
+        figure.style.textAlign = 'center';
+
+        const media = document.createElement(kind === 'image' ? 'img' : kind);
+        const internalResource = src.startsWith(containerModule.RESOURCE_SCHEME);
+        if (internalResource) {
+            media.dataset.vdocResourceSrc = src;
+            media.src = resolveRuntimeResources(src);
+        } else {
+            media.src = src;
+        }
+        media.dataset.vdocMediaSource = 'src';
+        media.style.display = 'block';
+        media.style.margin = '0 auto';
+        media.style.maxWidth = '100%';
+        if (kind !== 'audio') media.style.height = 'auto';
+        if (kind === 'image') {
+            media.alt = description;
+            media.loading = 'lazy';
+            media.decoding = 'async';
+        } else {
+            media.controls = true;
+            media.preload = 'metadata';
+            media.setAttribute('aria-label', description);
+        }
+
+        const nativeWidth = Number(metadata.width);
+        const nativeHeight = Number(metadata.height);
+        if (nativeWidth > 0 && nativeHeight > 0) {
+            media.width = nativeWidth;
+            media.height = nativeHeight;
+            figure.dataset.vdocNativeWidth = String(nativeWidth);
+            figure.dataset.vdocNativeHeight = String(nativeHeight);
+        }
+        if (kind === 'audio') {
+            media.style.width = 'min(100%, 640px)';
+        }
+
+        const duration = Number(metadata.duration);
+        const durationText = formatMediaDuration(duration);
+        if (Number.isFinite(duration) && duration >= 0) {
+            figure.dataset.vdocDuration = String(Math.round(duration * 1000) / 1000);
+            figure.dataset.vdocDurationText = durationText;
+            media.dataset.vdocDuration = figure.dataset.vdocDuration;
+        }
+
+        const nativeFacts = [];
+        if (nativeWidth > 0 && nativeHeight > 0) {
+            nativeFacts.push(`原生分辨率 ${nativeWidth} × ${nativeHeight} px`);
+        }
+        if (durationText) {
+            nativeFacts.push(`原生时长 ${durationText}（${figure.dataset.vdocDuration} 秒）`);
+        }
+        if (!metadata.available) nativeFacts.push('原生元数据未能读取');
+        const nativeDescription = [
+            kind === 'image' ? '图片' : kind === 'video' ? '视频' : '音频',
+            description,
+            ...nativeFacts,
+        ].filter(Boolean).join('；');
+        // description 保存人类输入的内容语义；data-vdoc-description 则补充
+        // 分辨率、时长等机器探测结果，AI 可分别读取原始描述和完整媒体信息。
+        figure.setAttribute('description', description);
+        figure.dataset.vdocDescription = nativeDescription;
+        figure.setAttribute('aria-label', nativeDescription);
+        media.setAttribute('description', description);
+        media.dataset.vdocDescription = nativeDescription;
+        media.title = nativeDescription;
+
+        const caption = document.createElement('figcaption');
+        caption.textContent = description;
+        caption.style.marginTop = '.5em';
+        caption.style.fontSize = '.875em';
+        caption.style.opacity = '.72';
+        figure.append(media, caption);
+        // 单项媒体由 insertVisualObject() 转换为视觉对象。批量插入时这些
+        // figure 会先进入统一媒体组，不能提前变成 absolute 的 PPT 子对象，
+        // 否则组内所有媒体会重叠在同一坐标。
+        return figure;
+    }
+
+    function insertVisualObject(object) {
+        flushPendingRenderedEdits();
+        const root = getRenderRoot();
+        if (!root || !object) return false;
+        objectModule?.normalizeObjectNode(object, isSlideDeck());
+
+        if (isSlideDeck()) {
+            const scene = root.querySelector(
+                '.vdoc-slide-editor-runtime > .vdoc-slide-scene,'
+                + '.vdoc-slide-editor-runtime > [data-vdoc-slide]'
+            ) || root.querySelector('.vdoc-slide-editor-runtime');
+            if (!scene) return false;
+            scene.appendChild(object);
+            const prepared = cleanBlockForSource(object);
+            const inserted = withCurrentSourceDocument((fragment) => {
+                const sourceScene = fragment.querySelector(
+                    '.vdoc-slide-scene, [data-vdoc-slide]'
+                ) || fragment.firstElementChild;
+                if (!sourceScene) return false;
+                sourceScene.appendChild(prepared);
+                return true;
+            });
+            if (!inserted) {
+                object.remove();
+                return false;
+            }
+        } else {
+            const current = state.activeEditableBlock
+                && root.contains(state.activeEditableBlock)
+                ? state.activeEditableBlock
+                : root.querySelector('[data-vdoc-block]:last-of-type');
+            const anchor = current?.closest?.('table, [data-vdoc-block]') || current;
+            const parent = anchor?.parentElement
+                || root.querySelector('[data-vdoc-preserve="true"]')
+                || root.querySelector('.vdoc-flow-runtime');
+            if (!parent) return false;
+            if (anchor?.parentElement) anchor.after(object);
+            else parent.appendChild(object);
+            if (!insertSourceBlockRelativeTo(blockIdentityOf(anchor), object, 'after')) {
+                object.remove();
+                return false;
+            }
+        }
+
+        markDirty();
+        captureSnapshot();
+        renderDocument();
+        const objectId = object.dataset.vdocObjectId;
+        const rendered = objectId
+            ? getRenderRoot()?.querySelector(
+                `[data-vdoc-object-id="${CSS.escape(objectId)}"]`
+            )
+            : null;
+        if (rendered) state.objectController?.select(rendered);
         return true;
+    }
+
+    function commitVisualObjectMutation(mutation) {
+        if (!state.document || !mutation?.objectId) return false;
+        finalizeEditBurst();
+        const result = objectModule.applyMutationToSource(
+            currentSourceHtml(),
+            mutation,
+            isSlideDeck()
+        );
+        if (!result.changed) return false;
+        setCurrentSourceHtml(result.source);
+        state.previewRevision = -1;
+        state.previewResult = null;
+        markDirty();
+        captureSnapshot();
+        renderDocument();
+        if (mutation.type !== 'delete') {
+            const rendered = getRenderRoot()?.querySelector(
+                `[data-vdoc-object-id="${CSS.escape(mutation.objectId)}"]`
+            );
+            if (rendered) state.objectController?.select(rendered);
+        }
+        return true;
+    }
+
+    function insertMediaFigure(figure) {
+        return insertVisualObject(figure);
+    }
+
+    function mediaKindForFile(file) {
+        const mimeKind = String(file?.type || '').match(/^(image|video|audio)\//)?.[1];
+        return mimeKind || inferMediaKind(file?.name || '');
+    }
+
+    function formatFileSize(bytes) {
+        const size = Number(bytes) || 0;
+        if (size < 1024) return `${size} B`;
+        if (size < 1024 ** 2) return `${(size / 1024).toFixed(1)} KB`;
+        return `${(size / 1024 ** 2).toFixed(1)} MB`;
+    }
+
+    function syncMediaInputMode() {
+        const localMode = state.mediaLocalItems.length > 0;
+        elements['media-src-fields'].hidden = localMode;
+        elements['media-src-input'].disabled = localMode;
+        elements['media-kind-select'].disabled = localMode;
+        elements['media-description-input'].disabled = localMode;
+        elements['media-local-list'].querySelectorAll('textarea, button').forEach((control) => {
+            control.disabled = elements['media-insert-btn'].disabled;
+        });
+    }
+
+    function renderMediaLocalItems() {
+        const list = elements['media-local-list'];
+        const items = state.mediaLocalItems;
+        list.hidden = !items.length;
+        elements['media-local-count'].textContent = items.length
+            ? `已选择 ${items.length} 个文件`
+            : '尚未选择本地文件';
+        list.replaceChildren(...items.map((item, index) => {
+            const card = document.createElement('article');
+            card.className = 'media-local-item';
+            const kind = document.createElement('span');
+            kind.className = 'media-local-kind';
+            kind.textContent = item.kind === 'image' ? '图片'
+                : item.kind === 'video' ? '视频' : '音频';
+            const meta = document.createElement('div');
+            meta.className = 'media-local-meta';
+            const name = document.createElement('strong');
+            name.textContent = item.file.name;
+            const details = document.createElement('small');
+            details.textContent = `${item.file.type || '未知 MIME'} · ${formatFileSize(item.file.size)}`;
+            meta.append(name, details);
+            const remove = document.createElement('button');
+            remove.type = 'button';
+            remove.className = 'media-local-remove';
+            remove.textContent = '×';
+            remove.title = `移除 ${item.file.name}`;
+            remove.addEventListener('click', () => {
+                state.mediaLocalItems.splice(index, 1);
+                renderMediaLocalItems();
+            });
+            const description = document.createElement('textarea');
+            description.className = 'media-local-description';
+            description.placeholder = `描述“${item.file.name}”的实际内容，供 AI 理解`;
+            description.value = item.description;
+            description.dataset.mediaLocalId = item.id;
+            description.addEventListener('input', () => {
+                item.description = description.value;
+            });
+            card.append(kind, meta, remove, description);
+            return card;
+        }));
+        elements['media-insert-btn'].textContent = items.length
+            ? `读取信息并批量插入（${items.length}）`
+            : '读取信息并插入';
+        syncMediaInputMode();
+    }
+
+    function selectLocalMediaFiles(files) {
+        const accepted = [...(files || [])].map((file, index) => ({
+            id: `local-media-${Date.now()}-${index}`,
+            file,
+            kind: mediaKindForFile(file),
+            description: '',
+        })).filter((item) => ['image', 'video', 'audio'].includes(item.kind));
+        state.mediaLocalItems = accepted;
+        renderMediaLocalItems();
+        if (!accepted.length && files?.length) {
+            setMediaDialogStatus('所选文件中没有可识别的图片、视频或音频。', 'error');
+        } else if (accepted.length) {
+            setMediaDialogStatus(
+                `已载入 ${accepted.length} 个本地媒体；请逐一填写 description 后批量插入。`
+            );
+        }
+    }
+
+    function setMediaDialogStatus(message, type = '') {
+        const status = elements['media-dialog-status'];
+        status.textContent = message;
+        status.classList.toggle('loading', type === 'loading');
+        status.classList.toggle('error', type === 'error');
+    }
+
+    function closeMediaDialog() {
+        elements['media-dialog'].hidden = true;
+        elements['media-insert-btn'].disabled = false;
+        elements['media-cancel-btn'].disabled = false;
+        elements['media-src-input'].disabled = false;
+        elements['media-kind-select'].disabled = false;
+        elements['media-description-input'].disabled = false;
+        state.mediaLocalItems = [];
+        elements['media-local-input'].value = '';
+        renderMediaLocalItems();
+        setMediaDialogStatus('等待输入媒体地址或选择本地文件');
+    }
+
+    function insertMedia() {
+        if (!state.ready || state.mode !== 'render') {
+            showToast('请先打开文档并切换到连续编辑模式。');
+            return false;
+        }
+        elements['media-form'].reset();
+        state.mediaLocalItems = [];
+        renderMediaLocalItems();
+        setMediaDialogStatus('等待输入媒体地址或选择本地文件');
+        elements['media-dialog'].hidden = false;
+        window.setTimeout(() => elements['media-src-input'].focus(), 0);
+        return true;
+    }
+
+    async function submitMediaInsertion(event) {
+        event.preventDefault();
+        const localItems = [...state.mediaLocalItems];
+        const normalizedSrc = elements['media-src-input'].value.trim();
+        if (!localItems.length && !normalizedSrc) {
+            setMediaDialogStatus('请选择本地媒体文件，或输入媒体 src 地址。', 'error');
+            elements['media-src-input'].focus();
+            return false;
+        }
+
+        const selectedKind = elements['media-kind-select'].value;
+        const kind = selectedKind === 'auto'
+            ? inferMediaKind(normalizedSrc)
+            : selectedKind;
+        if (!localItems.length && !['image', 'video', 'audio'].includes(kind)) {
+            setMediaDialogStatus(
+                '无法自动识别媒体类型，请在上方明确选择图片、视频或音频。',
+                'error'
+            );
+            elements['media-kind-select'].focus();
+            return false;
+        }
+
+        elements['media-insert-btn'].disabled = true;
+        elements['media-cancel-btn'].disabled = true;
+        elements['media-src-input'].disabled = true;
+        elements['media-kind-select'].disabled = true;
+        elements['media-description-input'].disabled = true;
+        syncMediaInputMode();
+        setMediaDialogStatus('正在读取原生分辨率与音视频时长…', 'loading');
+
+        try {
+            let insertedFigures = [];
+            if (localItems.length) {
+                const batch = document.createElement('section');
+                batch.className = 'vdoc-media-batch';
+                batch.dataset.vdocMediaBatch = String(localItems.length);
+                batch.dataset.vdocObject = 'media-group';
+                batch.dataset.vdocObjectName = `${localItems.length} 个媒体`;
+                batch.style.textAlign = 'center';
+                for (let index = 0; index < localItems.length; index += 1) {
+                    const item = localItems[index];
+                    setMediaDialogStatus(
+                        `正在读取第 ${index + 1} / ${localItems.length} 个媒体：${item.file.name}`,
+                        'loading'
+                    );
+                    const bytes = new Uint8Array(await item.file.arrayBuffer());
+                    const probeUrl = URL.createObjectURL(new Blob(
+                        [bytes],
+                        { type: item.file.type || 'application/octet-stream' }
+                    ));
+                    let metadata;
+                    try {
+                        metadata = await readMediaMetadata(item.kind, probeUrl);
+                    } finally {
+                        URL.revokeObjectURL(probeUrl);
+                    }
+                    const description = item.description.trim() || item.file.name;
+                    const resource = await containerModule.registerResource(
+                        state.document,
+                        state.documentResourceData,
+                        {
+                            bytes,
+                            kind: 'media',
+                            name: item.file.name,
+                            mime: item.file.type,
+                            description,
+                            nativeWidth: metadata.width,
+                            nativeHeight: metadata.height,
+                            duration: metadata.duration,
+                            durationText: formatMediaDuration(Number(metadata.duration)),
+                        }
+                    );
+                    const resourceSrc = containerModule.resourceReference(resource);
+                    const figure = createMediaFigure(
+                        item.kind,
+                        resourceSrc,
+                        metadata,
+                        description,
+                        {
+                            embedded: true,
+                            name: item.file.name,
+                            type: item.file.type,
+                            size: item.file.size,
+                        }
+                    );
+                    batch.appendChild(figure);
+                    insertedFigures.push(figure);
+                }
+                if (!insertMediaFigure(batch)) insertedFigures = [];
+            } else {
+                const metadata = await readMediaMetadata(kind, normalizedSrc);
+                const fallbackDescription = mediaNameFromSrc(normalizedSrc)
+                    || (kind === 'image'
+                        ? '插入的图片'
+                        : kind === 'video'
+                            ? '插入的视频'
+                            : '插入的音频');
+                const description = elements['media-description-input'].value.trim()
+                    || fallbackDescription;
+                const figure = createMediaFigure(
+                    kind,
+                    normalizedSrc,
+                    metadata,
+                    description
+                );
+                if (insertMediaFigure(figure)) insertedFigures = [figure];
+            }
+            if (!insertedFigures.length) {
+                setMediaDialogStatus('当前页面没有可插入媒体的位置。', 'error');
+                return false;
+            }
+
+            const summary = insertedFigures.length === 1
+                ? insertedFigures[0].dataset.vdocDescription
+                : `${insertedFigures.length} 个本地媒体，均已写入独立 description 与源信息`;
+            closeMediaDialog();
+            showToast(`已插入媒体 · ${summary}`, 'success', 5000);
+            return true;
+        } catch (error) {
+            setMediaDialogStatus(`媒体插入失败：${error.message}`, 'error');
+            return false;
+        } finally {
+            elements['media-insert-btn'].disabled = false;
+            elements['media-cancel-btn'].disabled = false;
+            syncMediaInputMode();
+        }
     }
 
     function showSelectionBar(x, y) {
@@ -2415,6 +3350,9 @@ ${parsedDocument().html}
             showToast('请先选择一段文字。');
             return;
         }
+        // 浮动格式条拥有独立的 fixed 层叠上下文。进入模态样式库前主动
+        // 收起它，避免格式条悬浮在遮罩和对话框之上。
+        hideSelectionBar();
         elements['style-library-dialog'].hidden = false;
         populateStyleCategories();
         renderStyleLibrary();
@@ -2503,7 +3441,14 @@ ${parsedDocument().html}
     }
 
     function renderStylePreview(style) {
-        const frame = elements['style-preview-frame'];
+        const previousFrame = elements['style-preview-frame'];
+        // Chromium 可能在 iframe 隐藏后复用相同 srcdoc 的浏览上下文，导致
+        // 第二次打开模态窗时只剩空白画布。每轮预览使用全新的隔离 iframe，
+        // 强制建立新的文档上下文，同时保留原节点的 class、sandbox 和标题。
+        const frame = previousFrame.cloneNode(false);
+        frame.removeAttribute('srcdoc');
+        previousFrame.replaceWith(frame);
+        elements['style-preview-frame'] = frame;
         try {
             const preview = styleLibrary.createPreviewDocument(style.id, {
                 text: state.selectionText || style.previewText,
@@ -2708,8 +3653,8 @@ ${preview.css}
     width: 100%;
     height: 100%;
 }
-${documentCssForShadow()}
-${parsedSlide(slide).css}
+${resolveRuntimeResources(documentCssForShadow())}
+${resolveRuntimeResources(parsedSlide(slide).css)}
 
 /* 必须位于分页自定义 CSS 之后，保证预览始终冻结在初始帧。 */
 .slide-thumbnail-stage *,
@@ -2729,7 +3674,7 @@ svg set {
 `;
         const stage = document.createElement('span');
         stage.className = 'slide-thumbnail-stage';
-        stage.innerHTML = parsedSlide(slide).html;
+        stage.innerHTML = resolveRuntimeResources(parsedSlide(slide).html);
         root.append(style, stage);
 
         stage.querySelectorAll('[contenteditable]').forEach((node) =>
@@ -3442,6 +4387,100 @@ ${safeCss}
         }, 0);
     }
 
+    async function initializeLineageAvatars() {
+        if (typeof api.loadAgentsList !== 'function') return [];
+        try {
+            const agents = await api.loadAgentsList();
+            state.lineageAgents = Array.isArray(agents) ? agents : [];
+        } catch (error) {
+            state.lineageAgents = [];
+            console.warn('[Scriptorium] 无法读取 Agent 头像索引：', error);
+        }
+        return state.lineageAgents;
+    }
+
+    function lineageAuthorName(checkpoint) {
+        return String(
+            checkpoint?.author?.name
+            || checkpoint?.author?.signature
+            || checkpoint?.maid?.name
+            || (checkpoint?.source === 'agent' ? '未署名 Agent' : '人类')
+        ).trim();
+    }
+
+    function lineageAvatarFallback(checkpoint, authorName) {
+        if (checkpoint?.source === 'agent') {
+            const compactName = String(authorName || '')
+                .replace(/未署名\s*Agent/gi, '')
+                .replace(/\s*Agent\s*/gi, '')
+                .trim();
+            return compactName.slice(0, 1).toUpperCase() || 'AI';
+        }
+        return '人';
+    }
+
+    async function lineageAvatarFor(checkpoint) {
+        const source = checkpoint?.source === 'agent' ? 'agent' : 'human';
+        const authorName = lineageAuthorName(checkpoint);
+        const cacheKey = `${source}:${authorName.toLocaleLowerCase()}`;
+        if (state.lineageAvatarCache.has(cacheKey)) {
+            return state.lineageAvatarCache.get(cacheKey);
+        }
+        if (state.lineageAvatarPending.has(cacheKey)) {
+            return state.lineageAvatarPending.get(cacheKey);
+        }
+
+        const request = (async () => {
+            try {
+                let avatar = null;
+                if (source === 'human') {
+                    avatar = await api.loadUserAvatar?.();
+                } else {
+                    const normalizedAuthor = authorName.toLocaleLowerCase();
+                    const agent = state.lineageAgents.find((candidate) => {
+                        const normalizedAgent = String(candidate?.name || '').trim().toLocaleLowerCase();
+                        return normalizedAgent
+                            && (normalizedAgent.includes(normalizedAuthor)
+                                || normalizedAuthor.includes(normalizedAgent));
+                    });
+                    if (agent?.folder) avatar = await api.loadAgentAvatar?.(agent.folder);
+                }
+                const resolved = avatar || null;
+                state.lineageAvatarCache.set(cacheKey, resolved);
+                return resolved;
+            } catch (error) {
+                console.warn(`[Scriptorium] 无法读取“${authorName}”的文脉头像：`, error);
+                state.lineageAvatarCache.set(cacheKey, null);
+                return null;
+            } finally {
+                state.lineageAvatarPending.delete(cacheKey);
+            }
+        })();
+
+        state.lineageAvatarPending.set(cacheKey, request);
+        return request;
+    }
+
+    function createLineageAvatar(checkpoint) {
+        const authorName = lineageAuthorName(checkpoint);
+        const avatar = document.createElement('span');
+        avatar.className = `checkpoint-avatar ${checkpoint.source === 'agent' ? 'agent' : 'human'} loading`;
+        avatar.textContent = lineageAvatarFallback(checkpoint, authorName);
+        avatar.dataset.author = authorName;
+        avatar.setAttribute('role', 'img');
+        avatar.setAttribute('aria-label', `${authorName}的头像`);
+        avatar.title = authorName;
+
+        lineageAvatarFor(checkpoint).then((source) => {
+            if (!source || !avatar.isConnected || avatar.dataset.author !== authorName) return;
+            avatar.style.backgroundImage = `url("${String(source).replace(/["\\\r\n]/g, '\\$&')}")`;
+            avatar.textContent = '';
+            avatar.classList.add('has-avatar');
+            avatar.classList.remove('loading');
+        });
+        return avatar;
+    }
+
     function renderLineage() {
         elements['checkpoint-count'].textContent = String(state.checkpoints.length);
         const pendingCount = state.checkpoints.filter((record) => record.status === 'pending').length;
@@ -3457,11 +4496,13 @@ ${safeCss}
             item.className = `checkpoint-item ${checkpoint.source} ${status}${
                 highRisk ? ' high-risk' : ''
             }`;
-            item.innerHTML = '<div class="checkpoint-meta"><span class="checkpoint-source"></span><time></time></div><h3></h3><p></p><span class="checkpoint-status"></span>';
-            const authorName = checkpoint.author?.name || checkpoint.author?.signature || '';
+            item.innerHTML = '<div class="checkpoint-meta"><span class="checkpoint-identity"><span class="checkpoint-source"></span></span><time></time></div><h3></h3><p></p><span class="checkpoint-status"></span>';
+            const authorName = lineageAuthorName(checkpoint);
+            const identity = item.querySelector('.checkpoint-identity');
+            identity.prepend(createLineageAvatar(checkpoint));
             item.querySelector('.checkpoint-source').textContent = checkpoint.source === 'agent'
-                ? `AI 协作${authorName ? ` · ${authorName}` : ''}`
-                : `人类刻点${authorName ? ` · ${authorName}` : ''}`;
+                ? `AI 协作 · ${authorName}`
+                : `人类刻点 · ${authorName}`;
             item.querySelector('time').textContent = new Date(checkpoint.createdAt).toLocaleString('zh-CN');
             item.querySelector('h3').textContent = checkpoint.name;
             item.querySelector('p').textContent = checkpoint.summary
@@ -3784,6 +4825,14 @@ ${safeCss}
         elements['open-btn'].addEventListener('click', chooseOpen);
         elements['import-btn'].addEventListener('click', chooseImport);
         elements['welcome-open-btn'].addEventListener('click', chooseOpen);
+        elements['collect-external-resources'].checked =
+            localStorage.getItem('scriptorium:collect-external-resources') === 'true';
+        elements['collect-external-resources'].addEventListener('change', (event) => {
+            localStorage.setItem(
+                'scriptorium:collect-external-resources',
+                String(event.target.checked)
+            );
+        });
         elements['save-btn'].addEventListener('click', () => saveDocument(false));
         elements['save-as-btn'].addEventListener('click', () => saveDocument(true));
         elements['export-flow-html-btn'].addEventListener('click', () => exportRichDocument('html-flow'));
@@ -3904,6 +4953,18 @@ ${safeCss}
                 elements['pr-review-receipt'].value
             );
         });
+        elements['media-local-select-btn'].addEventListener(
+            'click',
+            () => elements['media-local-input'].click()
+        );
+        elements['media-local-input'].addEventListener('change', (event) => {
+            selectLocalMediaFiles(event.target.files);
+        });
+        elements['media-form'].addEventListener('submit', submitMediaInsertion);
+        elements['media-cancel-btn'].addEventListener('click', closeMediaDialog);
+        elements['media-dialog'].addEventListener('click', (event) => {
+            if (event.target === elements['media-dialog']) closeMediaDialog();
+        });
         elements['create-checkpoint-btn'].addEventListener('click', () => {
             elements['checkpoint-name-input'].value = '';
             elements['checkpoint-note-input'].value = '';
@@ -4006,6 +5067,7 @@ ${safeCss}
 
     function bindKeyboard() {
         window.addEventListener('keydown', (event) => {
+            if (state.objectController?.handleKeydown(event)) return;
             const modifier = event.ctrlKey || event.metaKey;
             const key = event.key.toLowerCase();
             const formControl = event.target?.closest?.('input, textarea, select, .CodeMirror');
@@ -4036,6 +5098,7 @@ ${safeCss}
                 event.preventDefault();
                 restoreHistory(1);
             } else if (event.key === 'Escape') {
+                closeMediaDialog();
                 closeStyleLibrary();
                 hideSelectionBar();
                 clearExplicitBlockSelection();
@@ -4096,6 +5159,8 @@ ${safeCss}
         });
         window.addEventListener('beforeunload', () => {
             finalizeEditBurst();
+            state.resourceResolver?.revoke();
+            state.resourceResolver = null;
             state.renderSurfaceAbortController?.abort();
             if (state.compositionEnterFrame !== null) {
                 window.cancelAnimationFrame(state.compositionEnterFrame);
@@ -4104,6 +5169,7 @@ ${safeCss}
                 window.cancelAnimationFrame(state.formattingSyncFrame);
             }
             disposeSlideRuntime();
+            state.objectController?.dispose();
             state.pageObserver?.disconnect();
             state.slideThumbnailObserver?.disconnect();
             window.clearTimeout(state.paginationTimer);
@@ -4119,13 +5185,36 @@ ${safeCss}
     }
 
     async function initialize() {
-        if (!api || !core || !styleLibrary || !pagination || !asyncModule
-            || !runtimeModule || !sourceEditorModule || !sessionModule
+        if (!api || !core || !containerModule || !window.JSZip
+            || !styleLibrary || !pagination || !asyncModule || !exportResourcesModule
+            || !runtimeModule || !sourceEditorModule || !sessionModule || !objectModule
             || !sourceEditorController || !sessionController
             || !window.ScriptoriumVisibility || !window.ScriptoriumAgentModule) {
             throw new Error('Scriptorium 原生文档内核或模块未载入。');
         }
         cacheElements();
+        state.objectController = objectModule.createObjectController({
+            elements,
+            getRoot: getRenderRoot,
+            getZoom: () => state.zoom,
+            isSlideDeck,
+            canInsert: () => state.ready && state.mode === 'render',
+            insertObject: insertVisualObject,
+            commitMutation: commitVisualObjectMutation,
+            onSelectionChange: (selection) => {
+                if (!elements['selection-status']) return;
+                if (!selection) {
+                    elements['selection-status'].hidden = !state.explicitBlockSelection;
+                    elements['selection-status'].textContent = state.explicitBlockSelection
+                        ? `已选 ${state.selectionBlockIds.length} 块`
+                        : '';
+                    return;
+                }
+                elements['selection-status'].hidden = false;
+                elements['selection-status'].textContent =
+                    `对象 · ${selection.name || '未命名'}`;
+            },
+        });
         restorePanelWidths();
         restoreAutoApprovalConfig();
         restoreSecurityReviewConfig();
@@ -4137,6 +5226,7 @@ ${safeCss}
         state.agentApi = window.ScriptoriumAgentModule.createAgentApi({
             state,
             core,
+            containerModule,
             getRenderRoot,
             getReadRoot,
             getCurrentHtml: currentSourceHtml,
@@ -4161,8 +5251,14 @@ ${safeCss}
                 renderStyleLibrary();
             }
         });
-        await Promise.all([loadSystemFonts(), renderRecentDocuments()]);
+        await Promise.all([
+            loadSystemFonts(),
+            renderRecentDocuments(),
+        ]);
         renderLineage();
+        // 头像属于非阻塞易用性增强。精简测试宿主或旧主进程可能尚未注册
+        // 头像 IPC，不能因此延迟文档工作面就绪；索引到达后再刷新文脉即可。
+        initializeLineageAvatars().then(renderLineage);
         updateIdentity();
         api.windowReady({ surface: 'scriptorium', version: 2, format: core.FORMAT });
     }
