@@ -14,23 +14,13 @@ AppData/LoomApps/*
 node_modules/
 
 .env
-**/config.env
-!**/config.env.example
+!audio_engine/.env
 
-# ===== 运行时数据 / 缓存 / 数据库 =====
-*.db
-*.db-shm
-*.db-wal
-*.sqlite
-*.sqlite-shm
-*.sqlite-wal
-.doubao_api_cache.json
-**/code.bin
-AppData/
-node_modules/
-bin/
 /public/assets
+
 **/.DS_Store
+
+# Rust build artifacts
 **/target/
 **/Cargo.lock
 !rust_chat_data_service/Cargo.lock
@@ -41,11 +31,22 @@ rust_audio_engine/.cargo/
 
 # Reports and logs
 **/reports/
+
+# 临时忽略的文件（本地修改，不提交）
 .npmrc
+modules/ipc/chatHandlers.js
+modules/itemListManager.js
+modules/settingsManager.js
+package-lock.json
+package.json
+!vendor/webawesome-runtime/package.json
 styles/themes.css
+
+# LibreHardwareMonitor 官方二进制由开发者本地自行准备，不进入仓库
 vendor/LibreHardwareMonitor/*
 !vendor/LibreHardwareMonitor/README.md
-bin/
+
+# 忽略 WebIndexTTS2 生成输出目录
 /WebIndexTTS2/tmp-output/
 
 # rust_audio_engine 运行时缓存（响度分析等）
@@ -61,8 +62,10 @@ loudness_cache.db-shm
 **/.codex/
 
 /开发文档/
-bin/
 
+# UI QA screenshots captured by Electron smoke tests; never commit generated
+# visual artifacts as source baselines.
+/screenshots/
 
 # 本机字体名称表兼容副本（可能受第三方字体许可证约束，不进入仓库）
 /font-compat-output/
