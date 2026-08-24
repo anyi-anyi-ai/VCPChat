@@ -1,0 +1,10 @@
+{
+  "taskId": "task_mt3t8o9w_e5c9353a",
+  "command": "powershell -ExecutionPolicy Bypass -File \"F:\\yinpin\\yinyu\\Download_Batch4.ps1\"",
+  "shell": "/bin/bash",
+  "status": "failed",
+  "output": "\n[Error] spawn /bin/bash ENOENT",
+  "exitCode": -1,
+  "startTime": "2026-08-22T03:20:09.956Z",
+  "endTime": "2026-08-22T03:20:09.958Z"
+}

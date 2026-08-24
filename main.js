@@ -1459,7 +1459,9 @@ if (!gotTheLock) {
         // 主窗口页面完成加载、触发展示后再后台预热 Scriptorium。
         // 不 await：重型 CommonJS 解析不会延迟主窗口首屏；若用户更早打开
         // 文坊，临时 IPC 桥接会立即启动并等待同一个单例加载 Promise。
+        console.log('[DEBUG] Reached renderer-loading');
         reportStartup('renderer-loading', 0.9, '正在绘制聊天界面');
+        console.log('[DEBUG] About to call loadMainWindow()');
         void loadMainWindow()
             .then(() => loadDocxHandlers())
             .catch((error) => {
@@ -1481,6 +1483,8 @@ if (!gotTheLock) {
                 console.log('[Main] Desktop window auto-opened.');
             }, 1000);
         }
+    }).catch(err => {
+        console.error('[Main] CRITICAL ERROR during startup initialization:', err);
     });
 
     // --- Python Execution IPC Handler ---

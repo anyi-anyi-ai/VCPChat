@@ -1356,6 +1356,10 @@ function initialize(mainWindow, context) {
     }
 
     /**
+     * Part B: 检查历史记录中是否有用户参与
+     * @param {Array} history
+     * @returns {boolean}
+     */
      function hasUserParticipation(history) {
          return Array.isArray(history) && history.some(message =>
              message &&
@@ -1363,7 +1367,7 @@ function initialize(mainWindow, context) {
              message.isThinking !== true
          );
      }
- 
+
      /**
       * Part C: 计算单个话题的未读消息数
       * @param {Object} topic - 话题对象
