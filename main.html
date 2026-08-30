@@ -630,7 +630,7 @@
                         <!-- 语音设置可折叠容器 -->
                         <div class="agent-settings-collapsible-container agent-params-collapsible-container agent-settings-section collapsed" data-section-key="tts">
                             <div class="agent-settings-section-header params-header" id="ttsToggleHeader">
-                                <span class="agent-settings-section-title params-title">语音设置 (Sovits TTS)</span>
+                                <span class="agent-settings-section-title params-title">语音设置 (本地 SoVITS / 网络 MiMo 预置·自然控制·克隆)</span>
                                 <div class="agent-settings-section-summary params-summary" id="ttsSummary"></div>
                                 <button type="button" class="agent-settings-toggle-btn params-toggle-btn" id="ttsToggleBtn"
                                     aria-label="展开/折叠语音设置">
@@ -642,7 +642,7 @@
                             </div>
                             <div class="agent-settings-section-content params-content" id="ttsContent">
                                 <div>
-                                    <label for="agentTtsVoicePrimary">主语言模型:</label>
+                                    <label for="agentTtsVoicePrimary">主语言音色 / MiMo 模式:</label>
                                     <div class="model-input-container">
                                         <select id="agentTtsVoicePrimary" name="ttsVoicePrimary">
                                             <option value="">不使用语音</option>
@@ -670,7 +670,7 @@
                                 </div>
 
                                 <div>
-                                    <label for="agentTtsVoiceSecondary">副语言模型:</label>
+                                    <label for="agentTtsVoiceSecondary">副语言音色 / MiMo 模式:</label>
                                     <div class="model-input-container">
                                         <select id="agentTtsVoiceSecondary" name="ttsVoiceSecondary">
                                             <option value="">不使用</option>
@@ -690,6 +690,35 @@
                                             step="0.1" value="1.0">
                                         <span id="ttsSpeedValue">1.0</span>
                                     </div>
+                                    <small style="color: var(--text-secondary); margin-top: 5px; display: block;">
+                                        本地 SoVITS 使用该语速；MiMo 按模型原生节奏合成，可用下方自然语言提示词描述语速。
+                                    </small>
+                                </div>
+
+                                <div class="settings-form-group tts-director-settings">
+                                    <div class="tts-director-heading">
+                                        <label for="agentTtsDirectorPromptInput">MiMo 自然语言演绎提示词:</label>
+                                        <button type="button" id="fillAgentTtsDirectorTemplateBtn"
+                                            class="tts-director-template-button" title="填入角色、场景和指导模板">
+                                            导演模板
+                                        </button>
+                                    </div>
+                                    <div class="tts-director-composer">
+                                        <textarea id="agentTtsDirectorPromptInput"
+                                            class="tts-director-editor tts-director-editor-new"
+                                            rows="1"
+                                            placeholder="点击展开，描述角色、场景与演绎指导；Ctrl+Enter 添加"></textarea>
+                                        <button type="button" id="addAgentTtsDirectorPromptBtn"
+                                            class="small-button tts-director-action-button"
+                                            title="添加导演提示词" aria-label="添加导演提示词">+</button>
+                                    </div>
+                                    <div id="agentTtsDirectorPromptsContainer"
+                                        class="tts-director-prompts-container"></div>
+                                    <small class="tts-director-help">
+                                        适用于网络模式：预置音色模式使用“提示词 + voice”控制演绎；
+                                        自然语言控制模式使用专用模型且不发送 voice；克隆模式使用参考音频作为 voice，并可用提示词微调发音风格。
+                                        Ctrl+Enter 添加，右侧 − 删除；本地 SoVITS 会忽略这些提示词。
+                                    </small>
                                 </div>
                             </div>
                         </div>
@@ -1837,7 +1866,7 @@
                                             <label for="voiceModeNetwork"
                                                 style="display: inline-flex; align-items: center; gap: 6px; margin: 0;">
                                                 <input type="radio" id="voiceModeNetwork" name="voiceMode" value="network">
-                                                <span>网络 API 模式</span>
+                                                <span>网络 MiMo TTS 模式</span>
                                             </label>
                                         </div>
                                         <small style="color: var(--text-secondary); margin-top: 5px; display: block;">
@@ -1866,18 +1895,22 @@
 
                                 <div class="settings-subsection">
                                     <div class="settings-subsection-heading">
-                                        <div class="settings-subsection-title">网络 API 模式</div>
-                                        <p class="settings-subsection-description">当语音模式为“网络 API 模式”时，使用网络供应商配置作为主要推理入口。</p>
+                                        <div class="settings-subsection-title">网络 MiMo TTS</div>
+                                        <p class="settings-subsection-description">直接连接 DMXAPI 或小米官方 MiMo 2.5 TTS，支持 SSE 流式音频播放。</p>
                                     </div>
 
                                     <div class="settings-form-group">
-                                        <label for="voiceNetworkProviderUrl">网络供应商 URL:</label>
+                                        <label for="voiceNetworkProviderUrl">MiMo API URL:</label>
                                         <input type="url" id="voiceNetworkProviderUrl" name="voiceNetworkProviderUrl"
-                                            placeholder="例如: https://api.example.com/voice">
+                                            placeholder="https://www.dmxapi.cn/v1 或 https://api.xiaomimimo.com/v1">
+                                        <small style="color: var(--text-secondary); margin-top: 5px; display: block;">
+                                            可填写到 /v1，也可填写完整的 /v1/chat/completions；程序会自动补全。
+                                        </small>
                                     </div>
                                     <div class="settings-form-group">
-                                        <label for="voiceNetworkProviderKey">网络供应商 Key:</label>
-                                        <input type="password" id="voiceNetworkProviderKey" name="voiceNetworkProviderKey">
+                                        <label for="voiceNetworkProviderKey">MiMo API Key:</label>
+                                        <input type="password" id="voiceNetworkProviderKey" name="voiceNetworkProviderKey"
+                                            placeholder="填写与 URL 属于同一平台的 API Key">
                                     </div>
                                 </div>
 

@@ -221,11 +221,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function getVoiceRuntimeSettings(settings = {}) {
         return {
-            voiceMode: settings.voiceMode || 'local',
+            voiceMode: settings.voiceMode === 'network' ? 'network' : 'local',
             speechRecognizerBrowserPath: settings.speechRecognizerBrowserPath || '',
             speechRecognizerPagePath: settings.speechRecognizerPagePath || 'Voicechatmodules/recognizer.html',
-            voiceNetworkSettings: settings.voiceNetworkSettings || { sovitsUrl: '', sovitsKey: '' },
-            voiceLocalSettings: settings.voiceLocalSettings || { providerUrl: '', providerKey: '' }
+            voiceNetworkSettings: settings.voiceNetworkSettings || { providerUrl: '', providerKey: '' },
+            voiceLocalSettings: settings.voiceLocalSettings || { sovitsUrl: '', sovitsKey: '' }
         };
     }
 
@@ -505,8 +505,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
         console.log(`[VoiceChat] Requesting TTS for message ${msgId}`, {
             voiceMode: globalSettings.voiceMode || 'local',
-            networkSovitsUrl: globalSettings.voiceNetworkSettings?.sovitsUrl || '',
-            localProviderUrl: globalSettings.voiceLocalSettings?.providerUrl || ''
+            networkProviderUrl: globalSettings.voiceNetworkSettings?.providerUrl || '',
+            localSovitsUrl: globalSettings.voiceLocalSettings?.sovitsUrl || ''
         });
         window.electronAPI.sovitsSpeak({
             text: text,
@@ -514,6 +514,7 @@ document.addEventListener('DOMContentLoaded', () => {
             speed: agentConfig.ttsSpeed,
             msgId: msgId,
             ttsRegex: agentConfig.ttsRegexPrimary,
+            directorPrompts: agentConfig.ttsDirectorPrompts,
             voiceSecondary: agentConfig.ttsVoiceSecondary,
             ttsRegexSecondary: agentConfig.ttsRegexSecondary
         });
@@ -532,7 +533,12 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         isPlaying = true;
-        const { audioData, msgId } = audioQueue.shift(); // Get the next audio from the queue
+        const {
+            audioData,
+            msgId,
+            audioFormat = 'mp3',
+            playbackRate = 1
+        } = audioQueue.shift(); // Get the next audio from the queue
 
         console.log(`[VoiceChat] Processing audio from queue for msgId ${msgId}`);
 
@@ -542,10 +548,13 @@ document.addEventListener('DOMContentLoaded', () => {
             byteNumbers[i] = byteCharacters.charCodeAt(i);
         }
         const byteArray = new Uint8Array(byteNumbers);
-        const audioBlob = new Blob([byteArray], { type: 'audio/mpeg' });
+        const audioBlob = new Blob([byteArray], { type: audioFormat === 'wav' ? 'audio/wav' : 'audio/mpeg' });
         const audioUrl = URL.createObjectURL(audioBlob);
 
         currentAudio = new Audio(audioUrl);
+        currentAudio.playbackRate = Math.min(2, Math.max(0.5, Number(playbackRate) || 1));
+        // 尽量请求浏览器保留音高；不同 Electron/Chromium 版本可能降级为变调播放。
+        if ('preservesPitch' in currentAudio) currentAudio.preservesPitch = true;
 
         // Check if user gesture has been detected
         if (!userGestureDetected) {
@@ -585,7 +594,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     detectUserGesture();
                     errorMsg.remove();
                     // Retry playing this audio
-                    audioQueue.unshift({ audioData, msgId });
+                    audioQueue.unshift({ audioData, msgId, audioFormat, playbackRate });
                     processAudioQueue();
                 });
                 messageElement.appendChild(errorMsg);
@@ -612,9 +621,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     window.electronAPI.onPlayTtsAudio((data) => {
-        const { audioData, msgId } = data;
-        console.log(`[VoiceChat] Queued audio for msgId ${msgId}`);
-        audioQueue.push({ audioData, msgId });
+        const { audioData, msgId, audioFormat = 'mp3', playbackRate = 1 } = data;
+        console.log(`[VoiceChat] Queued audio for msgId ${msgId} at ${playbackRate}x`);
+        audioQueue.push({ audioData, msgId, audioFormat, playbackRate });
         processAudioQueue(); // Attempt to process the queue
     });
 
