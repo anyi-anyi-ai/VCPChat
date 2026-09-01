@@ -76,8 +76,8 @@ const mainChatSettingsOwner = createMainChatSettingsOwner({ initial: {
     enableUserChatBubbleUi: true,
     showUserMetaInChatBubbleUi: true,
     voiceMode: 'local',
-    speechRecognizerBrowserPath: '',
-    speechRecognizerPagePath: 'Voicechatmodules/recognizer.html',
+    voiceInputMode: 'windows_voice_typing',
+    voiceInputShortcut: 'F7',
     voiceLocalSettings: {
         sovitsUrl: '',
         sovitsKey: ''
