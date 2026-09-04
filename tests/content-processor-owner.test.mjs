@@ -118,3 +118,29 @@ test('HTML code preview is sandboxed without same-origin authority', () => {
     processor.dispose();
     dom.window.close();
 });
+
+test('interactive custom action button with data-target and prompt prefix cleaning', async () => {
+    const dom = new JSDOM('<body><section id="chat"><div class="vcp-action-btn" data-target="直接生成第三章第一节的草稿">✅ 请直接在聊天框回复：<br>直接生成第三章第一节的草稿</div></section></body>');
+    const root = dom.window.document.getElementById('chat');
+    const calls = [];
+    const processor = createContentProcessor();
+    processor.initializeContentProcessor({
+        chatMessagesDiv: root,
+        messageCommands: { handleSendMessage: text => calls.push(text) },
+        uiHelper: {}
+    });
+
+    processor.processInteractiveButtons(root);
+    const btn = root.querySelector('.vcp-action-btn');
+    assert.equal(btn.dataset.vcpInteractive, 'true');
+
+    btn.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+    await new Promise(resolve => setTimeout(resolve, 30));
+
+    assert.deepEqual(calls, ['[[点击按钮:直接生成第三章第一节的草稿]]']);
+    assert.equal(btn.dataset.disabled, 'true');
+    assert.equal(btn.getAttribute('aria-disabled'), 'true');
+
+    processor.dispose();
+    dom.window.close();
+});

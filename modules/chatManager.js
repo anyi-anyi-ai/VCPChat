@@ -1303,7 +1303,9 @@ export const chatManager = (() => {
         const { messageInput } = elements;
         const renderTarget = request?.domRenderer || messageRenderer;
         const input = request?.input || messageInput;
-        let content = typeof request?.content === 'string' ? request.content : input.value; // Use let as it might be modified
+        let content = typeof request === 'string'
+            ? request
+            : (typeof request?.content === 'string' ? request.content : input.value); // Use let as it might be modified
         const attachedFiles = Array.isArray(request?.attachments) ? request.attachments : attachedFilesRef.get();
         const sendSelectedItemRef = request?.conversation?.selectedItemRef || currentSelectedItemRef;
         const sendTopicIdRef = request?.conversation?.topicIdRef || currentTopicIdRef;

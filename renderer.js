@@ -796,6 +796,30 @@ mainChatSettingsPresentationOwner.configureStartup({
                 topTabManager: window.topTabManager,
             },
         } }));
+
+        // 挂载全局便捷交互桥接方法，供气泡内自定义脚本、按钮以及扩展模块调用
+        window.sendMessage = (text) => {
+            if (typeof text === 'string' && text.trim()) {
+                return chatManager.handleSendMessage(text.trim());
+            }
+        };
+        window.input = (text) => {
+            if (typeof text === 'string') {
+                if (messageInput) {
+                    messageInput.value = text;
+                    messageInput.dispatchEvent(new Event('input', { bubbles: true }));
+                }
+                if (text.trim()) {
+                    return chatManager.handleSendMessage(text.trim());
+                }
+            }
+        };
+        ownedRendererSubscriptions.add({
+            dispose: () => {
+                delete window.sendMessage;
+                delete window.input;
+            }
+        });
     } else {
         console.error('[RENDERER_INIT] chatManager module not found!');
     }
