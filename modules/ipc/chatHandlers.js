@@ -1397,17 +1397,17 @@ function initialize(mainWindow, context) {
     }
 
     /**
-     * Part B: 检查历史记录中是否有用户参与
-     * @param {Array} history
+     * 判断话题历史中是否出现过用户参与（用户真实消息）。
+     * @param {Array} history - 消息历史
      * @returns {boolean}
      */
-     function hasUserParticipation(history) {
-         return Array.isArray(history) && history.some(message =>
-             message &&
-             message.role === 'user' &&
-             message.isThinking !== true
-         );
-     }
+    function hasUserParticipation(history) {
+        return Array.isArray(history) && history.some(message =>
+            message &&
+            message.role === 'user' &&
+            message.isThinking !== true
+        );
+    }
 
      /**
       * Part C: 计算单个话题的未读消息数
