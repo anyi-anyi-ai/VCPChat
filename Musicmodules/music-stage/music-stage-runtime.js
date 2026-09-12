@@ -24,13 +24,13 @@
         };
     };
 
+    const graphemeSegmenter = typeof Intl !== 'undefined' && Intl.Segmenter
+        ? new Intl.Segmenter(undefined, { granularity: 'grapheme' }) : null;
     const splitGraphemes = (text) => {
         const value = String(text ?? '');
-        if (typeof Intl !== 'undefined' && Intl.Segmenter) {
-            const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
-            return Array.from(segmenter.segment(value), (entry) => entry.segment);
-        }
-        return Array.from(value);
+        return graphemeSegmenter
+            ? Array.from(graphemeSegmenter.segment(value), (entry) => entry.segment)
+            : Array.from(value);
     };
 
     const EMPTY_LINES = Object.freeze([]);
@@ -67,6 +67,7 @@
         const endTime = Math.max(startTime + 0.08, declaredEnd || nextStart || startTime + 5);
         const words = Array.isArray(line?.words) && line.words.length
             ? line.words.map((word, wordIndex) => ({
+                ...word,
                 text: String(word?.text ?? ''),
                 startTime: Number.isFinite(word?.startTime) ? word.startTime : startTime,
                 endTime: Math.max(
@@ -123,10 +124,7 @@
             }
         }
 
-        if (result < previousIndex && previousIndex >= 0) {
-            const previous = lines[previousIndex];
-            if (previous && playbackTime >= previous.startTime - 1.25) return previousIndex;
-        }
+        // Absolute-time lookup: hysteresis here retains future lyrics after a backward seek.
         return result;
     };
 
@@ -164,6 +162,8 @@
         };
     };
 
+    // Retained as a public utility for compatibility. The per-frame multi-band
+    // resolver below uses one traversal instead of invoking this five times.
     const averageRange = (spectrum, startRatio, endRatio) => {
         if (!spectrum?.length) return 0;
         const start = Math.max(0, Math.floor(spectrum.length * startRatio));
@@ -175,11 +175,33 @@
 
     const resolveAudioBands = (spectrum) => {
         const values = spectrum || [];
-        const bass = averageRange(values, 0.01, 0.10);
-        const lowMid = averageRange(values, 0.10, 0.24);
-        const mid = averageRange(values, 0.24, 0.46);
-        const vocal = averageRange(values, 0.18, 0.58);
-        const treble = averageRange(values, 0.58, 0.98);
+        if (!values.length) {
+            return { power: 0, bass: 0, lowMid: 0, mid: 0, vocal: 0, treble: 0, spectrum: values };
+        }
+
+        const length = values.length;
+        const ranges = [
+            [Math.max(0, Math.floor(length * 0.01)), Math.min(length, Math.max(1, Math.ceil(length * 0.10)))],
+            [Math.max(0, Math.floor(length * 0.10)), Math.min(length, Math.max(Math.floor(length * 0.10) + 1, Math.ceil(length * 0.24)))],
+            [Math.max(0, Math.floor(length * 0.24)), Math.min(length, Math.max(Math.floor(length * 0.24) + 1, Math.ceil(length * 0.46)))],
+            [Math.max(0, Math.floor(length * 0.18)), Math.min(length, Math.max(Math.floor(length * 0.18) + 1, Math.ceil(length * 0.58)))],
+            [Math.max(0, Math.floor(length * 0.58)), Math.min(length, Math.max(Math.floor(length * 0.58) + 1, Math.ceil(length * 0.98)))]
+        ];
+        const totals = [0, 0, 0, 0, 0];
+
+        // One spectrum traversal; additions within every band retain the original
+        // ascending-index order, preserving the previous audio response values.
+        for (let index = 0; index < length; index += 1) {
+            const value = Number(values[index]) || 0;
+            for (let band = 0; band < ranges.length; band += 1) {
+                if (index >= ranges[band][0] && index < ranges[band][1]) totals[band] += value;
+            }
+        }
+
+        const averages = totals.map((total, index) => clamp(
+            total / Math.max(1, ranges[index][1] - ranges[index][0])
+        ));
+        const [bass, lowMid, mid, vocal, treble] = averages;
         const power = clamp(bass * 0.25 + lowMid * 0.2 + mid * 0.2 + vocal * 0.25 + treble * 0.1);
         return { power, bass, lowMid, mid, vocal, treble, spectrum: values };
     };
@@ -193,7 +215,8 @@
         const lineDuration = activeLine ? Math.max(0.001, activeLine.endTime - activeLine.startTime) : 1;
         const lineProgress = activeLine ? clamp((playbackTime - activeLine.startTime) / lineDuration) : 0;
         const wordState = resolveWordState(activeLine, playbackTime);
-        const spectrum = Array.isArray(app?.currentVisualizerData) ? app.currentVisualizerData : [];
+        const spectrum = Array.isArray(app?.currentVisualizerData) || ArrayBuffer.isView(app?.currentVisualizerData)
+            ? app.currentVisualizerData : [];
         const track = app?.playlist?.[app?.currentTrackIndex] || null;
 
         return {
@@ -265,7 +288,14 @@
         }
     }
 
+    // Call after intentional in-place lyric edits; normal source replacement is
+    // already tracked by array identity without hashing the whole song per frame.
+    const invalidateLines = (lines) => {
+        if (Array.isArray(lines)) normalizedLinesCache.delete(lines);
+    };
+
     global.MusicStageRuntime = Object.freeze({
+        invalidateLines,
         clamp,
         hashString,
         seededRandom,
