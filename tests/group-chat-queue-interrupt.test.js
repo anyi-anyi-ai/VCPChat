@@ -64,6 +64,38 @@ test('group queue interruption is exposed from engine through IPC and chat prelo
     assert.match(contextMenu, /GroupRenderer\?\.interruptGroupChatQueue/);
 });
 
+test('group user bubbles enter current history before DOM projection', () => {
+    const renderer = read('renderer.js');
+    const groupRenderer = read('Groupmodules/grouprenderer.js');
+    const messageRenderer = read('modules/messageRenderer.js');
+    const chatManager = read('modules/chatManager.js');
+
+    assert.match(renderer, /currentChatHistoryRef:\s*mainHistoryRef/);
+    assert.match(groupRenderer, /currentChatHistoryRef\s*=\s*dependencies\.currentChatHistoryRef/);
+    assert.match(groupRenderer, /pendingGroupUserMessageIds\.add\(userMessageForUI\.id\)/);
+    assert.match(chatManager, /groupRenderer\?\.isPendingUserMessage\?\.\(oldMsg\.id\)/);
+    assert.match(messageRenderer, /messageItem\._vcpMessageModel\s*=\s*message/);
+    assert.match(
+        messageRenderer,
+        /\.find\(m => m\.id === messageId\)\s*\|\|\s*messageItem\._vcpMessageModel/,
+        'visible bubbles must retain a context-menu model during JEV history replacement'
+    );
+
+    const historyCommitIndex = groupRenderer.indexOf(
+        'currentChatHistoryRef.set([...currentHistory, userMessageForUI])'
+    );
+    const renderIndex = groupRenderer.indexOf(
+        'messageRenderer.renderMessage(userMessageForUI)'
+    );
+
+    assert.notEqual(historyCommitIndex, -1, 'group user message must be committed to current history');
+    assert.notEqual(renderIndex, -1, 'group user message must still be rendered');
+    assert.ok(
+        historyCommitIndex < renderIndex,
+        'history must own the group user message before the context-menu-capable DOM bubble is rendered'
+    );
+});
+
 test('default invitation prompt carries the central group-chat system indicator', () => {
     const engine = read('Groupmodules/groupchat.js');
     const renderer = read('Groupmodules/grouprenderer.js');

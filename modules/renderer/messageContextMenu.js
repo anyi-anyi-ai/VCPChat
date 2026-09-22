@@ -72,6 +72,46 @@ function showContextMenu(event, messageItem, message) {
     const isThinkingOrStreaming = message.isThinking || messageItem.classList.contains('streaming');
     const isError = message.finishReason === 'error';
 
+    const createInterruptGroupQueueOption = () => {
+        if (currentSelectedItemVal.type !== 'group') return null;
+        const interruptGroupQueueOption = ownerDocument.createElement('div');
+        interruptGroupQueueOption.classList.add('context-menu-item', 'danger-item');
+        interruptGroupQueueOption.innerHTML = `<i class="fas fa-stop"></i> 中止群聊`;
+        interruptGroupQueueOption.onclick = async () => {
+            closeContextMenu();
+
+            if (!currentSelectedItemVal.id || !currentTopicIdVal) {
+                uiHelper.showToastNotification('无法中止群聊队列：群组或话题上下文不完整。', 'error');
+                return;
+            }
+
+            if (typeof ownerWindow.GroupRenderer?.interruptGroupChatQueue === 'function') {
+                await ownerWindow.GroupRenderer.interruptGroupChatQueue(
+                    currentSelectedItemVal.id,
+                    currentTopicIdVal
+                );
+                return;
+            }
+
+            if (typeof electronAPI?.interruptGroupChatQueue === 'function') {
+                const result = await electronAPI.interruptGroupChatQueue(
+                    currentSelectedItemVal.id,
+                    currentTopicIdVal
+                );
+                uiHelper.showToastNotification(
+                    result?.success
+                        ? '已中止群聊队列。'
+                        : `中止群聊队列失败：${result?.error || '未知错误'}`,
+                    result?.success ? 'success' : 'error'
+                );
+                return;
+            }
+
+            uiHelper.showToastNotification('无法中止群聊队列：接口不可用。', 'error');
+        };
+        return interruptGroupQueueOption;
+    };
+
     if (isThinkingOrStreaming) {
         const interruptOption = ownerDocument.createElement('div');
         interruptOption.classList.add('context-menu-item', 'danger-item');
@@ -124,45 +164,11 @@ function showContextMenu(event, messageItem, message) {
             }
         };
         menu.appendChild(interruptOption);
-    }
 
-    if (currentSelectedItemVal.type === 'group') {
-        const interruptGroupQueueOption = ownerDocument.createElement('div');
-        interruptGroupQueueOption.classList.add('context-menu-item', 'danger-item');
-        interruptGroupQueueOption.innerHTML = `<i class="fas fa-stop"></i> 中止群聊`;
-        interruptGroupQueueOption.onclick = async () => {
-            closeContextMenu();
-
-            if (!currentSelectedItemVal.id || !currentTopicIdVal) {
-                uiHelper.showToastNotification('无法中止群聊队列：群组或话题上下文不完整。', 'error');
-                return;
-            }
-
-            if (typeof ownerWindow.GroupRenderer?.interruptGroupChatQueue === 'function') {
-                await ownerWindow.GroupRenderer.interruptGroupChatQueue(
-                    currentSelectedItemVal.id,
-                    currentTopicIdVal
-                );
-                return;
-            }
-
-            if (typeof electronAPI?.interruptGroupChatQueue === 'function') {
-                const result = await electronAPI.interruptGroupChatQueue(
-                    currentSelectedItemVal.id,
-                    currentTopicIdVal
-                );
-                uiHelper.showToastNotification(
-                    result?.success
-                        ? '已中止群聊队列。'
-                        : `中止群聊队列失败：${result?.error || '未知错误'}`,
-                    result?.success ? 'success' : 'error'
-                );
-                return;
-            }
-
-            uiHelper.showToastNotification('无法中止群聊队列：接口不可用。', 'error');
-        };
-        menu.appendChild(interruptGroupQueueOption);
+        const interruptGroupQueueOption = createInterruptGroupQueueOption();
+        if (interruptGroupQueueOption) {
+            menu.appendChild(interruptGroupQueueOption);
+        }
     }
 
     // For non-thinking/non-streaming messages (including errors and completed messages)
@@ -430,6 +436,11 @@ function showContextMenu(event, messageItem, message) {
             menu.appendChild(redoGroupOption);
         }
 
+        const interruptGroupQueueOption = createInterruptGroupQueueOption();
+        if (interruptGroupQueueOption) {
+            menu.appendChild(interruptGroupQueueOption);
+        }
+
         menu.appendChild(deleteOption);
     }
 
@@ -462,7 +473,6 @@ function showContextMenu(event, messageItem, message) {
 
 function toggleEditMode(messageItem, message) {
     const { electronAPI, markedInstance, uiHelper } = mainRefs;
-    const currentChatHistoryArray = mainRefs.currentChatHistoryRef.get();
     const currentSelectedItemVal = mainRefs.currentSelectedItemRef.get();
     const currentTopicIdVal = mainRefs.currentTopicIdRef.get();
 
@@ -537,36 +547,48 @@ function toggleEditMode(messageItem, message) {
         const saveButton = ownerDocument.createElement('button');
         saveButton.innerHTML = `<i class="fas fa-save"></i> 保存`;
         saveButton.onclick = async () => {
-            // 🔧 关键修复：添加防御性编程和错误处理
             const newContent = textarea.value;
 
-            // Get original content for comparison
+            // 编辑器打开后，删除操作、JEV 投影或文件同步都可能原子替换历史数组。
+            // 只要原气泡仍连接在当前 Surface，它就继续拥有编辑权；历史暂时缺少
+            // 该 ID 时使用气泡模型恢复，而不是把同步空窗误判成“消息已变化”。
+            const latestHistory = mainRefs.currentChatHistoryRef.get();
+            const liveMessage = latestHistory.find(msg => msg.id === message.id)
+                || messageItem._vcpMessageModel
+                || message;
+
+            if (!messageItem.isConnected || !liveMessage?.id) {
+                uiHelper.showToastNotification("该消息已离开当前聊天，无法保存编辑。", "warning");
+                return;
+            }
+
+            const visibleItems = Array.from(
+                mainRefs.chatMessagesDiv?.querySelectorAll?.('.message-item[data-message-id]') || []
+            );
+            const visibleIndex = visibleItems.indexOf(messageItem);
+            const previousMessageId = visibleIndex > 0
+                ? visibleItems[visibleIndex - 1]?.dataset?.messageId
+                : null;
+            const nextMessageId = visibleIndex >= 0 && visibleIndex < visibleItems.length - 1
+                ? visibleItems[visibleIndex + 1]?.dataset?.messageId
+                : null;
+
             let originalTextContent = "";
-            if (typeof message.content === 'string') {
-                originalTextContent = message.content;
-            } else if (message.content && typeof message.content.text === 'string') {
-                originalTextContent = message.content.text;
+            if (typeof liveMessage.content === 'string') {
+                originalTextContent = liveMessage.content;
+            } else if (liveMessage.content && typeof liveMessage.content.text === 'string') {
+                originalTextContent = liveMessage.content.text;
             }
 
             // If content hasn't changed, just exit edit mode without saving.
             if (newContent === originalTextContent) {
-                toggleEditMode(messageItem, message);
+                toggleEditMode(messageItem, liveMessage);
                 return;
             }
 
-            const messageIndex = currentChatHistoryArray.findIndex(msg => msg.id === message.id);
-
-            if (messageIndex === -1) {
-                uiHelper.showToastNotification("无法找到要编辑的消息，编辑失败。", "error");
-                return;
-            }
-
-            // 🔧 保存原始状态以便回滚
-            const originalContent = currentChatHistoryArray[messageIndex].content;
-            const originalMessageContent = message.content;
-            const originalUpdatedAt = currentChatHistoryArray[messageIndex].updatedAt;
-            const originalMessageUpdatedAt = message.updatedAt;
             let watcherLeaseToken = null;
+            let committedHistory = null;
+            let committedMessage = null;
 
             // Watching is ancillary to the edit transaction. Failure to pause
             // or resume it must not turn a durable save into an apparent
@@ -589,31 +611,61 @@ function toggleEditMode(messageItem, message) {
                 console.warn('[EditMode] Failed to pause history watcher; continuing with edit:', watcherError);
             }
 
-            currentChatHistoryArray[messageIndex].content = newContent;
-            message.content = newContent;
-            const updatedAt = Date.now();
-            currentChatHistoryArray[messageIndex].updatedAt = updatedAt;
-            message.updatedAt = updatedAt;
-
             try {
                 if (currentSelectedItemVal.id && currentTopicIdVal) {
                     if (!mainRefs.historyMutationAuthority) throw new Error('History mutation authority is required for message edits');
-                    await mainRefs.historyMutationAuthority.replace({
+                    const updatedAt = Date.now();
+                    const commit = await mainRefs.historyMutationAuthority.mutate({
                         itemId: currentSelectedItemVal.id,
                         itemType: currentSelectedItemVal.type,
                         topicId: currentTopicIdVal,
                         category: 'message-edit',
-                    }, currentChatHistoryArray);
+                    }, historyForSave => {
+                        const nextHistory = [...historyForSave];
+                        let liveIndex = nextHistory.findIndex(entry => entry?.id === message.id);
+
+                        if (liveIndex === -1) {
+                            // 可见气泡仍在，但 JEV/删除写盘竞态使持久历史暂时漏掉它。
+                            // 依据当前 DOM 邻居恢复原楼层；邻居也已变化时按时间戳插入。
+                            const restoredMessage = {
+                                ...liveMessage,
+                                id: message.id
+                            };
+                            const previousIndex = previousMessageId
+                                ? nextHistory.findIndex(entry => entry?.id === previousMessageId)
+                                : -1;
+                            const nextIndex = nextMessageId
+                                ? nextHistory.findIndex(entry => entry?.id === nextMessageId)
+                                : -1;
+
+                            if (previousIndex >= 0) {
+                                liveIndex = previousIndex + 1;
+                            } else if (nextIndex >= 0) {
+                                liveIndex = nextIndex;
+                            } else {
+                                const restoredTimestamp = Number(restoredMessage.timestamp) || 0;
+                                liveIndex = nextHistory.findIndex(entry => (
+                                    (Number(entry?.timestamp) || 0) > restoredTimestamp
+                                ));
+                                if (liveIndex < 0) liveIndex = nextHistory.length;
+                            }
+                            nextHistory.splice(liveIndex, 0, restoredMessage);
+                        }
+
+                        nextHistory[liveIndex] = {
+                            ...nextHistory[liveIndex],
+                            content: newContent,
+                            updatedAt
+                        };
+                        return nextHistory;
+                    });
+                    committedHistory = [...commit.history];
+                    committedMessage = committedHistory.find(entry => entry?.id === message.id) || null;
                 }
             } catch (error) {
-                console.error('[EditMode] Save failed, rolling back:', error);
-                currentChatHistoryArray[messageIndex].content = originalContent;
-                message.content = originalMessageContent;
-                currentChatHistoryArray[messageIndex].updatedAt = originalUpdatedAt;
-                message.updatedAt = originalMessageUpdatedAt;
-                mainRefs.currentChatHistoryRef.set([...currentChatHistoryArray]);
+                console.error('[EditMode] Save failed:', error);
 
-                // 🔧 重新启动文件监控（即使保存失败）
+                // 重新启动文件监控（即使保存失败）
                 if (electronAPI.watcherStart && currentSelectedItemVal.config?.agentDataPath) {
                     try {
                         const historyFilePath = `${currentSelectedItemVal.config.agentDataPath}\\topics\\${currentTopicIdVal}\\history.json`;
@@ -626,10 +678,23 @@ function toggleEditMode(messageItem, message) {
                 if (uiHelper && typeof uiHelper.showToastNotification === 'function') {
                     uiHelper.showToastNotification(`编辑保存失败: ${error.message}`, "error");
                 }
-                return; // 不退出编辑模式，让用户重试
+                return; // 保存错误保留编辑模式，让用户重试
             }
 
-            mainRefs.currentChatHistoryRef.set([...currentChatHistoryArray]);
+            const activeItem = mainRefs.currentSelectedItemRef.get();
+            if (
+                committedHistory
+                && activeItem?.id === currentSelectedItemVal.id
+                && activeItem?.type === currentSelectedItemVal.type
+                && mainRefs.currentTopicIdRef.get() === currentTopicIdVal
+            ) {
+                mainRefs.currentChatHistoryRef.set(committedHistory);
+            }
+            if (committedMessage) {
+                message.content = committedMessage.content;
+                message.updatedAt = committedMessage.updatedAt;
+                messageItem._vcpMessageModel = committedMessage;
+            }
 
             if (contextMenuDependencies.updateMessageContent) {
                 contextMenuDependencies.updateMessageContent(message.id, newContent);
@@ -662,8 +727,8 @@ function toggleEditMode(messageItem, message) {
                 uiHelper.showToastNotification("消息编辑已保存。", "success");
             }
 
-            // 🔧 只有在保存成功后才退出编辑模式
-            toggleEditMode(messageItem, message);
+            // 只有在保存成功后才退出编辑模式，并使用最新提交模型恢复显示。
+            toggleEditMode(messageItem, committedMessage || message);
         };
 
         const cancelButton = ownerDocument.createElement('button');
