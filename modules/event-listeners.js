@@ -431,7 +431,7 @@ export function setupEventListeners(deps) {
         chatManager.handleSendMessage();
     });
 
-    // 发送按钮右键 - 打开「高级回复」(VCPChatTarven) 浮窗
+    // 高级回复主入口在输入框左侧加号；发送按钮右键保留为快捷入口。
     addListener(sendMessageBtn, 'contextmenu', (e) => {
         e.preventDefault();
         if (window.TavernManager && typeof window.TavernManager.togglePopover === 'function') {

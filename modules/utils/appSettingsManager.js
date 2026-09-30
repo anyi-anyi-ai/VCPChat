@@ -4,6 +4,7 @@ const nodeFs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { EventEmitter } = require('events');
+const { normalizePromptSettings } = require('../services/workspacePromptPlaceholders');
 
 class SettingsValidator {
     static validate(settings, defaultSettings) {
@@ -42,7 +43,11 @@ class SettingsValidator {
             console.log('Fixed invalid chatPresentationMode');
         }
 
-        const allowedVoiceInputModes = new Set(['windows_voice_typing', 'right_alt_hold']);
+        if (!['auto', 'zh', 'en', 'yue', 'ja', 'ko'].includes(validated.localSttLanguage)) {
+            validated.localSttLanguage = 'auto';
+        }
+
+        const allowedVoiceInputModes = new Set(['windows_voice_typing', 'right_alt_hold', 'local_sensevoice']);
         if (!allowedVoiceInputModes.has(validated.voiceInputMode)) {
             validated.voiceInputMode = 'windows_voice_typing';
             hasIssues = true;
@@ -55,6 +60,30 @@ class SettingsValidator {
             console.log('Fixed invalid voiceInputShortcut');
         } else {
             validated.voiceInputShortcut = validated.voiceInputShortcut.trim().toUpperCase();
+        }
+
+        const initialIdle = Number(validated.mainChatVoiceInitialIdleTimeout);
+        validated.mainChatVoiceInitialIdleTimeout = Number.isFinite(initialIdle)
+            ? Math.min(12, Math.max(1, initialIdle))
+            : 5.5;
+
+        const quietTimeout = Number(validated.mainChatVoiceQuietTimeout);
+        validated.mainChatVoiceQuietTimeout = Number.isFinite(quietTimeout)
+            ? Math.min(15, Math.max(0.5, quietTimeout))
+            : 2.5;
+
+        if (typeof validated.mainChatVoiceClearPhrase !== 'string') {
+            validated.mainChatVoiceClearPhrase = '';
+            hasIssues = true;
+        } else {
+            validated.mainChatVoiceClearPhrase = validated.mainChatVoiceClearPhrase.trim();
+        }
+
+        if (typeof validated.mainChatVoiceSendPhrase !== 'string') {
+            validated.mainChatVoiceSendPhrase = '';
+            hasIssues = true;
+        } else {
+            validated.mainChatVoiceSendPhrase = validated.mainChatVoiceSendPhrase.trim();
         }
 
         if (
@@ -173,6 +202,13 @@ class SettingsValidator {
             }
         }
 
+        // {{VCPChatWorkSpace}} 占位符行为设置：非法字段回落默认值并钳制范围。
+        const normalizedPromptSettings = normalizePromptSettings(validated.workspacePromptSettings);
+        if (JSON.stringify(normalizedPromptSettings) !== JSON.stringify(validated.workspacePromptSettings)) {
+            validated.workspacePromptSettings = normalizedPromptSettings;
+            hasIssues = true;
+        }
+
         if (!Array.isArray(validated.combinedItemOrder)) {
             validated.combinedItemOrder = [];
             hasIssues = true;
@@ -226,6 +262,7 @@ class SettingsManager extends EventEmitter {
             networkNotesPaths: [],
             workspaces: [],
             activeWorkspaceId: null,
+            workspacePromptSettings: { enabled: true, maxChars: 20000, maxDepth: 6 },
             filterEnabled: false,
             filterRules: [],
             toolAutoApprovalEnabled: false,
@@ -285,7 +322,12 @@ class SettingsManager extends EventEmitter {
             assistantAgent: '',
             voiceMode: 'local',
             voiceInputMode: 'windows_voice_typing',
+            localSttLanguage: 'auto',
             voiceInputShortcut: 'F7',
+            mainChatVoiceInitialIdleTimeout: 5.5,
+            mainChatVoiceQuietTimeout: 2.5,
+            mainChatVoiceClearPhrase: '',
+            mainChatVoiceSendPhrase: '',
             voiceLocalSettings: {
                 sovitsUrl: '',
                 sovitsKey: ''

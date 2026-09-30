@@ -67,6 +67,8 @@ const promptHandlers = require('./modules/ipc/promptHandlers'); // Import prompt
 const notesHandlers = require('./modules/ipc/notesHandlers'); // Import notes handlers
 const workspaceHandlers = require('./modules/ipc/workspaceHandlers'); // 工作区索引与实时引用
 const projectForgeHandlers = require('./modules/ipc/projectForgeHandlers'); // ProjectForge 施工图 GUI（只读 + 署名回退）
+const gitHandlers = require('./modules/ipc/gitHandlers'); // ProjectForge Git 源代码管理侧栏
+const sourceHandlers = require('./modules/ipc/sourceHandlers'); // ProjectForge 源码浏览 / 轻量编辑侧栏
 const assistantHandlers = require('./modules/ipc/assistantHandlers'); // Import assistant handlers
 const musicHandlers = require('./modules/ipc/musicHandlers'); // Import music handlers
 const diceHandlers = require('./modules/ipc/diceHandlers'); // Import dice handlers
@@ -77,6 +79,7 @@ const memoHandlers = require('./modules/ipc/memoHandlers'); // Import memo handl
 const ragHandlers = require('./modules/ipc/ragHandlers'); // Import RAG handlers
 const translatorHandlers = require('./modules/ipc/translatorHandlers'); // Import translator handlers
 const voiceHandlers = require('./modules/ipc/voiceHandlers'); // Import voice chat handlers
+const localSttHandlers = require('./modules/ipc/localSttHandlers'); // 本地 SenseVoice 语音识别
 // speechRecognizer is now lazy-loaded
 const canvasHandlers = require('./modules/ipc/canvasHandlers'); // Import canvas handlers
 const chartHandlers = require('./modules/ipc/chartHandlers'); // Agent 图表工作台与持久化服务
@@ -663,6 +666,7 @@ async function performQuitCleanup() {
         await historyWatcherLeases.dispose();
 
         try {
+            localSttHandlers.shutdown();
             await voiceHandlers.shutdownVoiceInputEngine();
         } catch (error) {
             console.warn('[Main] Failed to shut down native voice input engine:', error.message || error);
@@ -724,6 +728,7 @@ function createWindow({ deferLoad = false } = {}) {
         ...(process.platform === 'darwin' ? {} : { titleBarStyle: 'hidden' }),
         webPreferences: {
             preload: resolveProjectPreload(__dirname, PRELOAD_ROLES.CHAT),
+            sandbox: false, // preloads/* 需要 require 本地模块，沙箱内不可用，见 preloads/README.md
             contextIsolation: true,    // 恢复: 开启上下文隔离
             nodeIntegration: false,  // 恢复: 关闭Node.js集成在渲染进程
             spellcheck: true, // Enable spellcheck for input fields
@@ -1446,6 +1451,8 @@ if (!gotTheLock) {
         // 工作区索引在后台预热，不阻塞首屏。
         workspaceHandlers.initialize({ settingsManager: appSettingsManager, logger: console });
         projectForgeHandlers.initialize({ workspaceService: workspaceHandlers.workspaceService });
+        gitHandlers.initialize({ workspaceService: workspaceHandlers.workspaceService });
+        sourceHandlers.initialize({ workspaceService: workspaceHandlers.workspaceService });
 
         translatorHandlers.initialize({
             mainWindow,
@@ -1699,6 +1706,7 @@ if (!gotTheLock) {
         promptHandlers.initialize({ AGENT_DIR, APP_DATA_ROOT_IN_PROJECT });
         tavernHandlers.initialize({ APP_DATA_ROOT_IN_PROJECT });
         voiceHandlers.initialize({ mainWindow, openChildWindows, settingsManager: appSettingsManager, projectRoot: PROJECT_ROOT });
+        localSttHandlers.initialize({ appDataRoot: APP_DATA_ROOT_IN_PROJECT });
 
         ipcMain.on('minimize-to-tray', () => {
             if (mainWindow) {
