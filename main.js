@@ -23,6 +23,14 @@ if (process.env.VCPCHAT_BOOTSTRAP_OPERATION_ID && process.env.VCPCHAT_STATE_DIR)
         } catch { /* the original fatal error remains authoritative */ }
     });
 }
+// --- 核心流式守卫：挂载 stdout 与 stderr 的 EPIPE 错误静默吸收守卫 ---
+['stdout', 'stderr'].forEach((streamName) => {
+    if (process[streamName] && typeof process[streamName].on === 'function') {
+        process[streamName].on('error', (err) => {
+            if (err.code === 'EPIPE') return;
+        });
+    }
+});
 
 function reportLauncherProgress(stage, progress, message) {
     if (process.env.VCP_LAUNCHER_PROTOCOL !== '1') return;
@@ -471,6 +479,7 @@ function startDistributedServerAfterRenderer() {
     }
 
     distributedServerStartPromise = (async () => {
+        let server = null;
         try {
             const settings = await appSettingsManager?.readSettings();
             if (!settings?.enableDistributedServer) {
@@ -483,7 +492,7 @@ function startDistributedServerAfterRenderer() {
 
             console.log('[Main] Renderer is ready. Initializing distributed server in the background...');
             const DistributedServer = require('./VCPDistributedServer/VCPDistributedServer.js');
-            const server = new DistributedServer({
+            server = new DistributedServer({
                 mainServerUrl: settings.vcpLogUrl,
                 vcpKey: settings.vcpLogKey,
                 serverName: 'VCPChat-Desktop-Client-Distributed-Server',
@@ -504,9 +513,15 @@ function startDistributedServerAfterRenderer() {
             });
             distributedServer = server;
             await server.initialize();
-            return server;
+            return isFinalizingQuit || app.isQuitting ? null : server;
         } catch (error) {
-            distributedServer = null;
+            // 启动失败也需清理已加载的插件和可能创建的监听器。
+            if (server) {
+                await server.stop().catch(cleanupError => {
+                    console.warn('[Main] Failed to clean up distributed server startup:', cleanupError);
+                });
+            }
+            if (distributedServer === server) distributedServer = null;
             console.error('[Main] Failed to initialize distributed server after renderer readiness:', error);
             return null;
         }

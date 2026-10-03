@@ -919,22 +919,33 @@ function processInteractiveButtons(contentDiv, settings = {}) {
 
     // 设置热切换为关闭时，立即撤销当前内容树中既有按钮能力，而不只是停止绑定新按钮。
     if (settings.enableAiMessageButtons === false) {
-        contentDiv.querySelectorAll('[data-vcp-interactive="true"]').forEach(button => {
+        contentDiv.querySelectorAll('button[data-vcp-interactive="true"]').forEach(button => {
             clearOwnedTimeouts(button);
             button._vcpInteractiveCleanup?.();
             delete button._vcpInteractiveCleanup;
             delete button.dataset.vcpInteractive;
-            if (button.dataset.originalText || button.dataset.originalHtml) restoreButton(button);
+            if (button.dataset.originalText) restoreButton(button);
         });
         return;
     }
 
-    // Find all button-like elements (button tags, elements with data-send/data-target, or action button classes)
-    const buttons = contentDiv.querySelectorAll('button, [data-send], [data-target], .vcp-action-btn, .interactive-btn');
+    // 排除系统内建的控制按钮（工具结果删除、代码复制、Mermaid 视图栏等），避免劫持系统功能
+    const buttons = contentDiv.querySelectorAll('button');
 
     buttons.forEach(button => {
         // Skip if already processed
         if (button.dataset.vcpInteractive === 'true') return;
+
+        // 🟢 第一道防线：识别系统内建按钮与工具栏控件，直接放行
+        if (
+            button.classList.contains('vcp-tool-result-delete-btn') ||
+            button.classList.contains('code-copy-btn') ||
+            button.classList.contains('mermaid-viewer-btn') ||
+            button.dataset.vcpSystemControl === 'true' ||
+            button.closest('.vcp-tool-result-header, .code-copy-toolbar, .mermaid-viewer-toolbar')
+        ) {
+            return;
+        }
 
         // Mark as processed
         button.dataset.vcpInteractive = 'true';
@@ -958,11 +969,9 @@ function setupButtonStyle(button) {
     // Ensure button looks clickable
     button.style.cursor = 'pointer';
 
-    // Prevent any form submission or default behavior if it's a form element
-    if (button.tagName === 'BUTTON') {
-        button.type = 'button';
-        button.setAttribute('type', 'button');
-    }
+    // Prevent any form submission or default behavior
+    button.type = 'button';
+    button.setAttribute('type', 'button');
 
     // Note: Visual styling is left to AI-defined CSS classes and styles
 }
@@ -973,31 +982,27 @@ function setupButtonStyle(button) {
  */
 function handleAIButtonClick(event) {
     const button = event.currentTarget;
-    if (!button) return false;
+    if (!button || button.tagName !== 'BUTTON') return false;
 
-    // Completely prevent any default behavior
+    // Check if button is disabled
+    if (button.disabled) {
+        event.preventDefault();
+        event.stopPropagation();
+        return false;
+    }
+
+    // Get text to send (priority: data-send attribute > button text)
+    const sendText = button.dataset.send || button.textContent.trim();
+
+    // 🟢 第二道防线：若无有效发送内容，静默让出事件处理权，绝不掐死系统级事件冒泡
+    if (!sendText || sendText.length === 0) {
+        return false;
+    }
+
+    // 确定是合法的 AI 交互按钮时，才完全阻断默认行为与上层冒泡
     event.preventDefault();
     event.stopPropagation();
     event.stopImmediatePropagation();
-
-    // Check if button is disabled
-    if (button.disabled || button.getAttribute('aria-disabled') === 'true' || button.dataset.disabled === 'true') {
-        return false;
-    }
-
-    // Get text to send (priority: data-send attribute > data-target attribute > button text)
-    let sendText = button.dataset.send || button.dataset.target || button.getAttribute('data-target') || button.textContent.trim();
-
-    // Clean any fallback prompt prefixes if present (e.g. "✅ 请直接在聊天框回复：\n草稿内容")
-    if (sendText) {
-        sendText = sendText.replace(/^[✅✔\s]*(?:请直接在聊天框回复[：:]|回复[：:])\s*/i, '').trim();
-    }
-
-    // Validate text
-    if (!sendText || sendText.length === 0) {
-        console.warn('[ContentProcessor] Button has no text to send');
-        return false;
-    }
 
     // Format the text to be sent
     let finalSendText = `[[点击按钮:${sendText}]]`;
@@ -1026,22 +1031,16 @@ function handleAIButtonClick(event) {
  * @param {HTMLElement} button The button to disable
  */
 function disableButton(button) {
-    if ('disabled' in button) {
-        button.disabled = true;
-    }
-    button.setAttribute('aria-disabled', 'true');
-    button.dataset.disabled = 'true';
+    button.disabled = true;
     button.style.opacity = '0.6';
     button.style.cursor = 'not-allowed';
-    button.style.pointerEvents = 'none';
-
-    // Store original text and markup for potential restoration
-    const originalText = button.textContent;
-    button.dataset.originalHtml = button.innerHTML;
-    button.dataset.originalText = originalText;
 
     // Add checkmark to indicate it was clicked
+    const originalText = button.textContent;
     button.textContent = originalText + ' ✓';
+
+    // Store original text for potential restoration
+    button.dataset.originalText = originalText;
 }
 
 /**
@@ -1049,23 +1048,15 @@ function disableButton(button) {
  * @param {HTMLElement} button The button to restore
  */
 function restoreButton(button) {
-    if ('disabled' in button) {
-        button.disabled = false;
-    }
-    button.removeAttribute('aria-disabled');
-    delete button.dataset.disabled;
+    button.disabled = false;
     button.style.opacity = '1';
     button.style.cursor = 'pointer';
-    button.style.pointerEvents = '';
 
-    // Restore original content if available
-    if (button.dataset.originalHtml) {
-        button.innerHTML = button.dataset.originalHtml;
-        delete button.dataset.originalHtml;
-    } else if (button.dataset.originalText) {
+    // Restore original text if available
+    if (button.dataset.originalText) {
         button.textContent = button.dataset.originalText;
+        delete button.dataset.originalText;
     }
-    delete button.dataset.originalText;
 }
 
 /**
