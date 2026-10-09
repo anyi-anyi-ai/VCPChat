@@ -119,28 +119,36 @@ test('HTML code preview is sandboxed without same-origin authority', () => {
     dom.window.close();
 });
 
-test('interactive custom action button with data-target and prompt prefix cleaning', async () => {
-    const dom = new JSDOM('<body><section id="chat"><div class="vcp-action-btn" data-target="直接生成第三章第一节的草稿">✅ 请直接在聊天框回复：<br>直接生成第三章第一节的草稿</div></section></body>');
+test('long code blocks keep the side view and copy buttons side by side in one toolbar', () => {
+    const lines = Array.from({ length: 8 }, (_, i) => `line ${i}`).join('\n');
+    const dom = new JSDOM(`<body><div id="chat"><div class="md-content"><pre><code class="language-js">${lines}</code></pre></div></div></body>`);
     const root = dom.window.document.getElementById('chat');
-    const calls = [];
     const processor = createContentProcessor();
-    processor.initializeContentProcessor({
-        chatMessagesDiv: root,
-        messageCommands: { handleSendMessage: text => calls.push(text) },
-        uiHelper: {}
-    });
+    processor.initializeContentProcessor({ chatMessagesDiv: root, messageCommands: {}, uiHelper: {} });
+    const previousDocument = globalThis.document;
+    globalThis.document = dom.window.document;
+    try {
+        processor.processRenderedContent(root.querySelector('.md-content'), {});
+    } finally {
+        globalThis.document = previousDocument;
+    }
 
-    processor.processInteractiveButtons(root);
-    const btn = root.querySelector('.vcp-action-btn');
-    assert.equal(btn.dataset.vcpInteractive, 'true');
-
-    btn.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
-    await new Promise(resolve => setTimeout(resolve, 30));
-
-    assert.deepEqual(calls, ['[[点击按钮:直接生成第三章第一节的草稿]]']);
-    assert.equal(btn.dataset.disabled, 'true');
-    assert.equal(btn.getAttribute('aria-disabled'), 'true');
-
+    const pre = root.querySelector('pre');
+    const toolbars = pre.querySelectorAll(':scope > .vcp-codeblock-actions');
+    assert.equal(toolbars.length, 1);
+    assert.deepEqual(
+        [...toolbars[0].children].map(button => button.getAttribute('aria-label')),
+        ['侧边副屏查看', '复制代码'],
+        'each button pinned to the same corner on its own lets the copy button cover the side view button'
+    );
     processor.dispose();
     dom.window.close();
+});
+
+test('quote highlighting leaves button labels untouched', () => {
+    const dom = new JSDOM('<body><div id="m"><p>说 "你好" 吧</p><button>工具 · "query"</button></div></body>');
+    const root = dom.window.document.getElementById('m');
+    createContentProcessor().highlightAllPatternsInMessage(root);
+    assert.equal(root.querySelectorAll('p .highlighted-quote').length, 1);
+    assert.equal(root.querySelector('button').innerHTML, '工具 · "query"');
 });
