@@ -38,7 +38,7 @@
       "id": "builtin_scriptorium",
       "name": "文坊权限",
       "type": "system_suffix",
-      "enabled": true,
+      "enabled": false,
       "content": "VCP文坊编辑权限\n{{VCPScriptoriumCollaborator}}\n该命令集全局支持串行指令（command1 / command2 / …）\n除了基础的html动画和canvas动画，还支持anime.js与three.js，引用的cdn脚本源码会被自动替换为文档内核依赖本地源码，安全可靠。\n在创建样式时，尤其是pptx样式，建议每页使用独立的slideid标注样式避免互相污染，除非确实需要全局样式广播。",
       "scope": "global",
       "wrap": true,
@@ -82,7 +82,7 @@
       "id": "builtin_window_control",
       "name": "窗口控制权限",
       "type": "system_suffix",
-      "enabled": false,
+      "enabled": true,
       "content": "窗口感知器\n{{VCPProcessList}}\n窗口控制器\n{{VCPScreenPilot}}",
       "scope": "agent",
       "wrap": false,
@@ -93,7 +93,7 @@
       "id": "builtin_html_media",
       "name": "启用HTML多媒体权限",
       "type": "system_suffix",
-      "enabled": false,
+      "enabled": true,
       "content": "启用Html多媒体生成功能\n{{VCPMediaRenderer}}",
       "scope": "global",
       "wrap": true,
@@ -102,13 +102,13 @@
     },
     {
       "id": "builtin_workspace_tree",
-      "builtinKey": "workspace-tree",
       "name": "工作区目录感知",
       "type": "system_suffix",
-      "enabled": false,
+      "enabled": true,
       "content": "当前本地工作区的真实根路径与目录结构如下（不含文件内容，需要时请按“根目录 + 相对路径”读取真实文件）：\n{{VCPChatWorkSpace}}",
       "scope": "global",
       "wrap": true,
+      "builtinKey": "workspace-tree",
       "order": 9
     }
   ]
