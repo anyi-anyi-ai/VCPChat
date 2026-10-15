@@ -43,6 +43,8 @@ const IGNORED_ERRORS = [
     /dbus/i,
     // uiManager 在没有新版时钟/通知标题元素的布局里每次启动都会报，和副屏无关
     /Digital clock, notification title, or date display element not found/,
+    // webview 在 did-attach 时尚未完全准备好 dom-ready 的偶发环境日志
+    /The WebView must be attached to the DOM and the dom-ready event emitted/i,
 ];
 // 类型声明 persist: false 的标签不跨重启恢复（辅助对话、终端、命令输出），见 tab-types/*.js
 const NOT_PERSISTED = /^(sidechat-|terminal:|tool-output:)/;

@@ -179,7 +179,14 @@ export function createBrowserSideProvider({
             registered.catch(() => {});
             const registerGuest = () => {
                 if (registration || !api?.browserRegisterTarget || !webview?.getWebContentsId) return;
-                const guestId = webview.getWebContentsId();
+                let guestId;
+                try {
+                    guestId = webview.getWebContentsId();
+                } catch {
+                    // Electron 中 webview 触发 did-attach 时若尚未 dom-ready 会抛异常，静默等待 dom-ready 时再次注册
+                    return;
+                }
+                if (!guestId) return;
                 registeredGuestId = guestId;
                 registration = api.browserRegisterTarget(tab.id, guestId).then(res => {
                     if (!res?.success) throw new Error(res?.error || '浏览器目标注册失败。');
