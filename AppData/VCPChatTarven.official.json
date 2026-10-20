@@ -71,7 +71,7 @@
       "id": "builtin_server_auth_code",
       "name": "获取服务器验证码",
       "type": "system_suffix",
-      "enabled": true,
+      "enabled": false,
       "content": "工具权限验证码-服务器验证码\n{{USER_AUTH_CODE}}",
       "scope": "agent",
       "wrap": false,
