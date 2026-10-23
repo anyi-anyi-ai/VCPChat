@@ -1,8 +1,8 @@
 # VCPChat 项目文件目录结构
 
-> 自动生成于：2026-10-14 18:39:32  
+> 自动生成于：2026-10-23 00:44:36  
 
-> 项目根目录：`H:\VCP\VCPzhangduan\VCPChat`  
+> 项目根目录：`H:\VCP\VCPMain\VCPChat`  
 
 > 筛选文件类型：`.bash`、`.bat`、`.c`、`.cc`、`.cfg`、`.cjs`、`.cmd`、`.conf`、`.cpp`、`.cs`、`.css`、`.cxx`、`.example`、`.go`、`.h`、`.hpp`、`.htm`、`.html`、`.hxx`、`.ini`、`.ipynb`、`.java`、`.js`、`.json`、`.json5`、`.jsonc`、`.jsx`、`.kt`、`.kts`、`.less`、`.lock`、`.lua`、`.md`、`.mjs`、`.php`、`.properties`、`.ps1`、`.psd1`、`.psm1`、`.py`、`.pyi`、`.r`、`.rb`、`.rs`、`.rst`、`.sass`、`.scss`、`.sh`、`.sql`、`.svelte`、`.swift`、`.toml`、`.ts`、`.tsx`、`.txt`、`.vbs`、`.vue`、`.xml`、`.yaml`、`.yml`、`.zsh`  
 
@@ -10,18 +10,18 @@
 
 ## 文件统计
 
-- **总目录数**：230
-- **总文件数**：1448
+- **总目录数**：218
+- **总文件数**：1436
 - **文件类型数**：21
 
 | 类型 | 扩展名 | 数量 |
 | :--- | :--- | ---: |
-| JavaScript | `.js` | 876 |
-| CSS | `.css` | 152 |
-| Rust | `.rs` | 114 |
-| JSON | `.json` | 97 |
-| Markdown | `.md` | 62 |
-| HTML | `.html` | 52 |
+| JavaScript | `.js` | 875 |
+| CSS | `.css` | 151 |
+| Rust | `.rs` | 116 |
+| JSON | `.json` | 94 |
+| Markdown | `.md` | 60 |
+| HTML | `.html` | 44 |
 | Python | `.py` | 26 |
 | TOML | `.toml` | 9 |
 | Batch Script | `.bat` | 9 |
@@ -32,12 +32,12 @@
 | YAML | `.yml` | 6 |
 | .ini | `.ini` | 4 |
 | TypeScript | `.ts` | 3 |
+| PowerShell | `.ps1` | 3 |
 | TypeScript (React) | `.tsx` | 2 |
 | Shell Script | `.sh` | 2 |
-| PowerShell | `.ps1` | 2 |
 | C# | `.cs` | 1 |
 | .lock | `.lock` | 1 |
-| **合计** | - | **1448** |
+| **合计** | - | **1436** |
 
 ## 目录结构树
 
@@ -51,6 +51,8 @@ VCPChat/
 │       ├── side_pane_e2e.yml
 │       ├── side_pane_windows.yml
 │       └── vcpchat-installer.yml
+├── .snow/
+│   └── settings.json
 ├── Agenttaskmodules/
 │   ├── task.css
 │   ├── task.html
@@ -96,34 +98,6 @@ VCPChat/
 ├── audio_engine/
 │   └── IRPreset/
 │       └── 音频IR脉冲预设放在这.txt
-├── backup_before_voice_merge_20260606_145512/
-│   ├── Groupmodules/
-│   │   └── grouprenderer.js
-│   ├── modules/
-│   │   ├── ipc/
-│   │   │   └── voiceHandlers.js
-│   │   ├── chatManager.js
-│   │   └── event-listeners.js
-│   ├── styles/
-│   │   └── components.css
-│   ├── Voicechatmodules/
-│   │   ├── recognizer.html
-│   │   └── voicechat.js
-│   ├── main.html
-│   └── renderer.js
-├── backup_VoiceInput_20260606_143736/
-│   ├── Groupmodules/
-│   │   └── grouprenderer.js
-│   ├── modules/
-│   │   ├── chatManager.js
-│   │   └── event-listeners.js
-│   ├── styles/
-│   │   └── components.css
-│   ├── Voicechatmodules/
-│   │   └── recognizer.html
-│   ├── main.html
-│   ├── main.js
-│   └── renderer.js
 ├── bootstrap/
 │   ├── recovery-main.cjs
 │   ├── recovery-preload.cjs
@@ -369,6 +343,11 @@ VCPChat/
 │   │   ├── contentModes.js
 │   │   ├── contentRuntime.js
 │   │   ├── contentTransforms.js
+│   │   ├── contextCompactionContinuity.js
+│   │   ├── contextCompactionFidelity.js
+│   │   ├── contextCompactionPrompts.js
+│   │   ├── contextCompactionService.js
+│   │   ├── contextCompactionState.js
 │   │   ├── mainChatStateAuthority.js
 │   │   ├── memoryChatRepository.js
 │   │   ├── sideChatSessionService.js
@@ -384,6 +363,7 @@ VCPChat/
 │   │   │   ├── cards.js
 │   │   │   ├── decisionData.js
 │   │   │   └── rules.js
+│   │   ├── gameResourceManager.js
 │   │   ├── gameRuntime.js
 │   │   ├── gameSeatResolver.js
 │   │   └── gameToolAdapter.js
@@ -636,6 +616,7 @@ VCPChat/
 │   │   │   ├── group-slots.js
 │   │   │   ├── home-controls.js
 │   │   │   ├── identity-controls.js
+│   │   │   ├── input-cadence.js
 │   │   │   ├── marker-registry.js
 │   │   │   ├── pipeline.js
 │   │   │   ├── render-visibility.js
@@ -736,6 +717,7 @@ VCPChat/
 │   │   ├── lucide-adapter.js
 │   │   ├── material-runtime.js
 │   │   ├── message-file-changes.js
+│   │   ├── music-capsule.js
 │   │   ├── next-ui-apps.js
 │   │   ├── performance-recorder.js
 │   │   ├── project-plan-model.js
@@ -809,7 +791,8 @@ VCPChat/
 │   │       └── dom-renderer.js
 │   ├── utils/
 │   │   ├── agentConfigManager.js
-│   │   └── appSettingsManager.js
+│   │   ├── appSettingsManager.js
+│   │   └── atomicReplace.js
 │   ├── voice/
 │   │   ├── localStt/
 │   │   │   ├── assets.json
@@ -827,6 +810,7 @@ VCPChat/
 │   ├── chatManager.js
 │   ├── contextSanitizer.js
 │   ├── DASP.txt
+│   ├── diagnosticsSnapshot.js
 │   ├── emoticonManager.js
 │   ├── event-listeners.js
 │   ├── fileManager.js
@@ -837,6 +821,7 @@ VCPChat/
 │   ├── inputEnhancer.js
 │   ├── interruptHandler.js
 │   ├── itemListManager.js
+│   ├── launchMarks.js
 │   ├── lyricFetcher.js
 │   ├── mainChatCommands.js
 │   ├── messageRenderer.js
@@ -849,6 +834,7 @@ VCPChat/
 │   ├── settingsManager.js
 │   ├── SovitsTTS.js
 │   ├── speechRecognizer.js
+│   ├── stabilityLog.js
 │   ├── tavernRulesEngine.js
 │   ├── text-viewer.html
 │   ├── text-viewer.js
@@ -884,6 +870,7 @@ VCPChat/
 │   │   │   ├── stage-lyric-performance.js
 │   │   │   ├── stage-mode-utils.js
 │   │   │   ├── stage-pixi-effects.js
+│   │   │   ├── stage-starbloom.js
 │   │   │   ├── tempera-manager.js
 │   │   │   ├── tempera-pixi-core.js
 │   │   │   └── tunnel-manager.js
@@ -997,9 +984,17 @@ VCPChat/
 │   ├── prompt-manager.js
 │   ├── prompt-modules.css
 │   └── README.md
+├── public/
+│   └── assets/
+│       └── themes/
+│           └── default/
+│               ├── default.json
+│               └── theme.config.json
 ├── RAGmodules/
 │   ├── rag-observer-config.js
+│   ├── RAG_Observer.css
 │   ├── RAG_Observer.html
+│   ├── RAG_Observer.js
 │   └── RAG_Overlay.html
 ├── RMMusic/
 │   └── NORD/
@@ -1144,6 +1139,8 @@ VCPChat/
 │   │   │   ├── python.rs
 │   │   │   ├── rust_lang.rs
 │   │   │   └── types.rs
+│   │   ├── component.rs
+│   │   ├── geo.rs
 │   │   ├── lang.rs
 │   │   ├── main.rs
 │   │   ├── scan.rs
@@ -1266,6 +1263,7 @@ VCPChat/
 │   │   ├── message-file-changes.css
 │   │   ├── messages.css
 │   │   ├── motion.css
+│   │   ├── music-capsule.css
 │   │   ├── notification-center-cards.css
 │   │   ├── notification-center-dock.css
 │   │   ├── notification-center-list.css
@@ -1337,7 +1335,6 @@ VCPChat/
 │   ├── FEATURE_SUMMARY.md
 │   ├── index.html
 │   ├── main.js
-│   ├── package-lock.json
 │   ├── package.json
 │   ├── preload.js
 │   ├── run_silent.vbs
@@ -1352,14 +1349,14 @@ VCPChat/
 │   │   │   ├── blade-electron.js
 │   │   │   ├── blade-preload.js
 │   │   │   ├── blade-service.js
+│   │   │   ├── plugin-manifest.json
 │   │   │   └── readme.md
 │   │   ├── ChartController/
 │   │   │   ├── ChartControllerService.js
 │   │   │   └── plugin-manifest.json
 │   │   ├── ChatRoomViewer/
 │   │   │   ├── ChatRoomViewer.js
-│   │   │   ├── config.env.example
-│   │   │   └── plugin-manifest.json
+│   │   │   └── config.env.example
 │   │   ├── ChatTencentcos/
 │   │   │   ├── chat_tencentcos.py
 │   │   │   ├── config.env.example
@@ -1459,13 +1456,9 @@ VCPChat/
 │   │   │   │   ├── ShellViewer.css
 │   │   │   │   ├── ShellViewer.html
 │   │   │   │   └── ShellViewer.js
-│   │   │   ├── state/
-│   │   │   │   ├── task_mt3t725m_831b4f0f.json
-│   │   │   │   ├── task_mt3t8o9q_7a4fd1e0.json
-│   │   │   │   ├── task_mt3t8o9t_4093537f.json
-│   │   │   │   ├── task_mt3t8o9w_e5c9353a.json
-│   │   │   │   ├── task_mt3t8o9z_86a1b852.json
-│   │   │   │   └── task_mt3t8oa1_73652757.json
+│   │   │   ├── AdminConfirm.js
+│   │   │   ├── commandCapture.js
+│   │   │   ├── commandRunStore.js
 │   │   │   ├── plugin-manifest.json
 │   │   │   ├── PluginErrorReporter.js
 │   │   │   ├── PTYShellExecutor.impl.js
@@ -1473,7 +1466,8 @@ VCPChat/
 │   │   │   ├── PULL_REQUEST.md
 │   │   │   ├── README.md
 │   │   │   ├── ShellOutputPipeline.js
-│   │   │   └── ShellThemeBridge.js
+│   │   │   ├── ShellThemeBridge.js
+│   │   │   └── terminalKeyParser.js
 │   │   ├── ScreenPilot/
 │   │   │   ├── screenpilot_core/
 │   │   │   │   ├── __init__.py
@@ -1495,6 +1489,7 @@ VCPChat/
 │   │   │   └── ScriptoriumCollaboratorService.js
 │   │   ├── TableLampRemote/
 │   │   │   ├── main.py
+│   │   │   ├── plugin-manifest.json
 │   │   │   └── README.md
 │   │   ├── TopicMemo/
 │   │   │   ├── plugin-manifest.json
@@ -1564,6 +1559,7 @@ VCPChat/
 │   │   ├── VCPSuperDice/
 │   │   │   ├── example style.css
 │   │   │   ├── example.js
+│   │   │   ├── plugin-manifest.json
 │   │   │   ├── README.md
 │   │   │   └── superdice.js
 │   │   ├── VCPWEWallpaper/
@@ -1587,7 +1583,8 @@ VCPChat/
 │   │   │   ├── linux_dialog.py
 │   │   │   ├── plugin-manifest.json
 │   │   │   ├── README.md
-│   │   │   └── waiting_for_reply.py
+│   │   │   ├── waiting_for_reply.py
+│   │   │   └── windows_dialog.ps1
 │   │   └── WindowSensor/
 │   │       ├── plugin-manifest.json
 │   │       ├── sensor-wrapper.js
@@ -1606,8 +1603,6 @@ VCPChat/
 │   ├── frontend-plugin-loader.js
 │   ├── normalize-plugin-examples.js
 │   ├── Plugin.js
-│   ├── rotating_star(1).html
-│   ├── rotating_star.html
 │   └── VCPDistributedServer.js
 ├── VCPHumanToolBox/
 │   ├── ComfyUImodules/
@@ -1652,7 +1647,6 @@ VCPChat/
 │   │   └── WorkflowEditorLoader_Simplified.js
 │   ├── index.html
 │   ├── main.js
-│   ├── package-lock.json
 │   ├── package.json
 │   ├── preload.js
 │   ├── README.md
@@ -1667,28 +1661,11 @@ VCPChat/
 │   ├── voicechat.css
 │   ├── voicechat.html
 │   └── voicechat.js
-├── VoiceInput_Pack/
-│   ├── Groupmodules/
-│   │   └── grouprenderer.js
-│   ├── modules/
-│   │   ├── chatManager.js
-│   │   └── event-listeners.js
-│   ├── styles/
-│   │   └── components.css
-│   ├── Voicechatmodules/
-│   │   └── recognizer.html
-│   ├── main.html
-│   ├── main.js
-│   ├── README.md
-│   └── renderer.js
 ├── WebIndexTTS2/
 │   ├── README.md
 │   └── server.js
 ├── backup.py
 ├── check_theme_wallpapers.bat
-├── inspect.js
-├── inspect2.js
-├── inspect3.js
 ├── main.html
 ├── main.js
 ├── package-lock.json
@@ -1715,7 +1692,6 @@ VCPChat/
 ├── vcpchatREADME_jp.md
 ├── vcpchatREADME_ru.md
 ├── VCP同步异步插件开发手册.md
-├── VoiceInput_Merge_Report_20260606.md
 ├── 启动Vchat.vbs
 ├── 启动全部.vbs
 ├── 打开indextts管理页_启动服务器.bat
@@ -1732,5 +1708,5 @@ VCPChat/
   `.astro`, `.cache`, `.docusaurus`, `.git`, `.gradle`, `.hg`, `.hypothesis`, `.idea`, `.ipynb_checkpoints`, `.m2`, `.mypy_cache`, `.next`, `.nox`, `.nuxt`, `.output`, `.parcel-cache`, `.pnpm-store`, `.pyre`, `.pytest_cache`, `.ruff_cache`, `.svelte-kit`, `.svn`, `.temp`, `.tmp`, `.tox`, `.turbo`, `.venv`, `.virtualenv`, `.vite`, `.vs`, `.vscode`, `.webpack`, `.yarn`, `__pycache__`, `__tests__`, `appdata`, `arm64`, `artifacts`, `bin`, `bower_components`, `build`, `carthage`, `checkpoints`, `coverage`, `data_cache`, `debug`, `dist`, `doc`, `docs`, `documentation`, `env`, `example`, `examples`, `htmlcov`, `indexeddb`, `jspm_packages`, `local_storage`, `logs`, `models`, `node_modules`, `obj`, `out`, `output`, `packages`, `pip-wheel-metadata`, `pkg`, `pods`, `pretrained_models`, `project_structure.md`, `python_embedded`, `python_embeded`, `release`, `reports`, `screenshots`, `scripts`, `sessions`, `site-packages`, `storybook-static`, `target`, `temp`, `test`, `test-results`, `tests`, `tmp`, `user_data`, `userdata`, `vendor`, `venv`, `wheelhouse`, `x64`, `x86`, `开发文档`
 - **默认通配符排除**：
   `cmake-build-*`, `*.egg-info`, `*.dist-info`, `*.tmp`, `.DS_Store`, `Thumbs.db`, `desktop.ini`, `*.pyc`, `*.pyo`, `*.pyd`, `*.o`, `*.obj`, `*.class`, `*.tsbuildinfo`, `*.log`, `*.tmp`, `*.temp`, `*.swp`, `*.swo`, `*.bak`, `*~`, `*.suo`, `*.user`, `scripts`, `开发文档`, `doc`, `docs`, `documentation`, `test`, `tests`, `__tests__`, `example`, `examples`, `artifacts`, `screenshots`, `test-results`, `reports`, `models`, `checkpoints`, `pretrained_models`, `site-packages`, `python_embedded`, `python_embeded`, `PROJECT_STRUCTURE.md`
-- **.gitignore 生效规则**：共 58 条规则已并入跳过逻辑
+- **.gitignore 生效规则**：共 56 条规则已并入跳过逻辑
 </details>
