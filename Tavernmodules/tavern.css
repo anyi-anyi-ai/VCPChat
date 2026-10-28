@@ -473,10 +473,39 @@ body[data-vcp-theme="light"] .tavern-popover-header .tavern-icon-btn:hover {
 
 .tavern-manager-list-panel {
     flex: 0 0 290px;
+    min-width: 200px;
+    max-width: 60%;
+    box-sizing: border-box;
     border-right: 1px solid var(--border-color, rgba(255,255,255,0.1));
     display: flex;
     flex-direction: column;
     min-height: 0;
+    overflow: hidden;
+}
+
+/* 左右分栏拖拽条 */
+.tavern-manager-resizer {
+    flex: 0 0 6px;
+    cursor: col-resize;
+    background: transparent;
+    position: relative;
+    user-select: none;
+}
+.tavern-manager-resizer::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 50%;
+    width: 1px;
+    transform: translateX(-50%);
+    background: var(--border-color, rgba(255,255,255,0.12));
+    transition: background-color 0.15s ease;
+}
+.tavern-manager-resizer:hover::after,
+.tavern-manager-resizer.dragging::after {
+    background: rgba(74,144,226,0.85);
+    width: 2px;
 }
 
 .tavern-manager-list-toolbar {
@@ -565,9 +594,17 @@ body[data-vcp-theme="light"] .tavern-popover-header .tavern-icon-btn:hover {
 
 .tavern-manager-edit-panel {
     flex: 1 1 auto;
+    min-width: 0;
     padding: 16px;
     overflow-y: auto;
+    overflow-x: hidden;
     min-height: 0;
+    box-sizing: border-box;
+}
+
+.tavern-manager-edit-panel > * {
+    max-width: 100%;
+    box-sizing: border-box;
 }
 
 .tavern-manager-edit-empty {

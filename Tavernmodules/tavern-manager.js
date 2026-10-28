@@ -382,6 +382,7 @@
                             </div>
                             <div class="tavern-manager-list" data-role="list"></div>
                         </div>
+                        <div class="tavern-manager-resizer" data-role="resizer" title="拖动调整宽度"></div>
                         <div class="tavern-manager-edit-panel" data-role="edit"></div>
                     </div>
                 </div>
@@ -398,8 +399,80 @@
                 this._addNewRule(select.value);
             });
 
+            this._initManagerResizer(modal);
+
             this._renderManagerList();
             this._renderManagerEditPanel();
+        },
+
+        /**
+         * 初始化规则管理模态窗的左右分栏拖拽。
+         * 宽度按容器百分比记忆，窗口缩放时自动跟随。
+         */
+        _initManagerResizer(modal) {
+            const layout = modal.querySelector('.tavern-manager-layout');
+            const panel = modal.querySelector('.tavern-manager-list-panel');
+            const resizer = modal.querySelector('[data-role="resizer"]');
+            if (!layout || !panel || !resizer) return;
+
+            // 恢复上次拖拽的宽度（百分比）
+            const STORAGE_KEY = 'tavernManagerListRatio';
+            const savedRatio = parseFloat(localStorage.getItem(STORAGE_KEY) || '');
+            if (!Number.isNaN(savedRatio) && savedRatio > 0.1 && savedRatio < 0.7) {
+                panel.style.flex = `0 0 ${(savedRatio * 100).toFixed(2)}%`;
+            }
+
+            let dragging = false;
+
+            const onMove = (e) => {
+                if (!dragging) return;
+                const rect = layout.getBoundingClientRect();
+                if (rect.width <= 0) return;
+                const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+                let ratio = (clientX - rect.left) / rect.width;
+                // 夹在 15% ~ 65% 之间，保证两侧始终可见可操作
+                ratio = Math.min(0.65, Math.max(0.15, ratio));
+                panel.style.flex = `0 0 ${(ratio * 100).toFixed(2)}%`;
+                e.preventDefault();
+            };
+
+            const onUp = () => {
+                if (!dragging) return;
+                dragging = false;
+                resizer.classList.remove('dragging');
+                document.body.style.cursor = '';
+                document.body.style.userSelect = '';
+                const rect = layout.getBoundingClientRect();
+                if (rect.width > 0) {
+                    const ratio = panel.getBoundingClientRect().width / rect.width;
+                    try { localStorage.setItem(STORAGE_KEY, ratio.toFixed(4)); } catch (_) { /* ignore */ }
+                }
+                window.removeEventListener('mousemove', onMove);
+                window.removeEventListener('mouseup', onUp);
+                window.removeEventListener('touchmove', onMove);
+                window.removeEventListener('touchend', onUp);
+            };
+
+            const onDown = (e) => {
+                dragging = true;
+                resizer.classList.add('dragging');
+                document.body.style.cursor = 'col-resize';
+                document.body.style.userSelect = 'none';
+                window.addEventListener('mousemove', onMove);
+                window.addEventListener('mouseup', onUp);
+                window.addEventListener('touchmove', onMove, { passive: false });
+                window.addEventListener('touchend', onUp);
+                e.preventDefault();
+            };
+
+            resizer.addEventListener('mousedown', onDown);
+            resizer.addEventListener('touchstart', onDown, { passive: false });
+
+            // 双击分隔条恢复默认宽度
+            resizer.addEventListener('dblclick', () => {
+                panel.style.flex = '';
+                try { localStorage.removeItem(STORAGE_KEY); } catch (_) { /* ignore */ }
+            });
         },
 
         closeManagerModal() {
