@@ -1237,11 +1237,18 @@ ${canvasData.errors || 'No errors'}
                 console.error(`[GroupChat] sendStreamChunkToRenderer is not a function when sending 'agent_thinking' for ${agentName}!`);
             }
 
+            const thinkingIntensity = agentConfig.thinkingIntensity || agentConfig.thinking_intensity;
             const modelConfigForAgent = {
                model: modelResolution.effectiveModel,
                 temperature: parseFloat(agentConfig.temperature),
                 max_tokens: agentConfig.maxOutputTokens ? parseInt(agentConfig.maxOutputTokens) : undefined,
-                stream: agentConfig.streamOutput === true || String(agentConfig.streamOutput) === 'true'
+                stream: agentConfig.streamOutput === true || String(agentConfig.streamOutput) === 'true',
+                ...(thinkingIntensity && thinkingIntensity !== 'auto'
+                    ? {
+                        thinkingIntensity,
+                        reasoning_effort: thinkingIntensity === 'off' ? 'none' : thinkingIntensity
+                    }
+                    : {})
             };
 
             // === 分阶段弹性超时设计 (Phased Timeout Architecture) ===
@@ -1893,11 +1900,18 @@ ${canvasData.errors || 'No errors'}
             }
         }
 
+        const thinkingIntensity = agentConfig.thinkingIntensity || agentConfig.thinking_intensity;
         const modelConfigForAgent = {
            model: modelResolution.effectiveModel,
             temperature: parseFloat(agentConfig.temperature),
             max_tokens: agentConfig.maxOutputTokens ? parseInt(agentConfig.maxOutputTokens) : undefined,
-            stream: agentConfig.streamOutput === true || String(agentConfig.streamOutput) === 'true'
+            stream: agentConfig.streamOutput === true || String(agentConfig.streamOutput) === 'true',
+            ...(thinkingIntensity && thinkingIntensity !== 'auto'
+                ? {
+                    thinkingIntensity,
+                    reasoning_effort: thinkingIntensity === 'off' ? 'none' : thinkingIntensity
+                }
+                : {})
         };
 
         // === 分阶段弹性超时设计 (Phased Timeout Architecture) - Jev / 点名邀请 ===

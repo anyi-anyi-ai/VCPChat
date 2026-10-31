@@ -1,27 +1,57 @@
 /**
- * 输入框内的 AI 模型选择器。
- * 位于语音按钮左侧，读写当前 Agent 的 model 配置，与设置页的 Agent 模型保持一致。
+ * 输入框内的 AI 模型选择器与思考强度调节器。
+ * 位于语音按钮左侧，读写当前 Agent 的 model 与 thinkingIntensity 配置，与设置页的 Agent 模型保持一致。
  * 浮层视图与常用候选配置委托至公共的 ModelPickerPopup 引擎。
  */
 (function () {
     const STYLE_ID = 'vcp-composer-model-select-style';
     const CSS = `
-.vcp-model-select { position: relative; display: inline-flex; margin-left: auto !important; margin-right: 2px; flex: 0 0 auto; min-width: max-content; }
+.vcp-model-select { position: relative; display: inline-flex; align-items: center; margin-left: auto !important; margin-right: 2px; flex: 0 0 auto; min-width: max-content; gap: 2px; }
 .vcp-model-select:not([hidden]) ~ #mainVoiceInputBtn { margin-left: 0 !important; }
 .vcp-model-select:not([hidden]) ~ :is(#sendMessageBtn, .chat-send-button) { margin-left: 0 !important; }
 .vcp-model-select[hidden] { display: none !important; }
-.vcp-model-select-trigger {
-    display: inline-flex; align-items: center; gap: 4px; min-height: 28px; height: auto; padding: 4px 4px 4px 8px; max-width: none;
+.vcp-model-select-trigger, .vcp-thinking-select-trigger {
+    display: inline-flex; align-items: center; gap: 4px; min-height: 28px; height: auto; padding: 4px 6px; max-width: none;
     border: 0; border-radius: 8px; background: transparent; cursor: pointer;
     color: var(--vcp-ui-text-2, #a7afb1); font: inherit; font-size: 13px; line-height: 20px;
     transition: background-color .15s, color .15s;
 }
-.vcp-model-select-trigger:hover, .vcp-model-select-trigger[aria-expanded="true"] {
+.vcp-model-select-trigger { padding-left: 6px; padding-right: 6px; }
+.vcp-thinking-select-trigger { font-size: 12px; padding: 4px 6px; }
+.vcp-model-select-trigger:hover, .vcp-model-select-trigger[aria-expanded="true"],
+.vcp-thinking-select-trigger:hover, .vcp-thinking-select-trigger[aria-expanded="true"] {
     background: var(--vcp-ui-interactive-hover, rgba(127,127,127,.16)); color: var(--vcp-ui-text-0, currentColor);
 }
-.vcp-model-select-label { overflow: visible; text-overflow: clip; white-space: normal; overflow-wrap: anywhere; text-align: left; }
-.vcp-model-select-trigger svg { width: 12px; height: 12px; opacity: .7; flex: none; }
+.vcp-model-select-label, .vcp-thinking-select-label { overflow: visible; text-overflow: clip; white-space: normal; overflow-wrap: anywhere; text-align: left; }
+.vcp-model-select-trigger svg, .vcp-thinking-select-trigger svg { width: 12px; height: 12px; opacity: .7; flex: none; }
+.vcp-thinking-popup {
+    position: absolute; bottom: calc(100% + 6px); left: 0; min-width: 155px;
+    background: var(--vcp-ui-surface-2, #1e2227); border: 1px solid var(--vcp-ui-border-1, rgba(255,255,255,.12));
+    border-radius: 8px; padding: 4px; box-shadow: 0 4px 18px rgba(0,0,0,.4); z-index: 9999;
+    display: flex; flex-direction: column; gap: 2px;
+}
+.vcp-thinking-popup[hidden] { display: none !important; }
+.vcp-thinking-item {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    padding: 6px 10px; border-radius: 6px; border: 0; background: transparent;
+    color: var(--vcp-ui-text-1, #d0d7de); font: inherit; font-size: 12px; cursor: pointer; text-align: left;
+    transition: background-color .12s, color .12s;
+}
+.vcp-thinking-item:hover {
+    background: var(--vcp-ui-interactive-hover, rgba(255,255,255,.08)); color: var(--vcp-ui-text-0, #fff);
+}
+.vcp-thinking-item.active {
+    color: var(--vcp-ui-accent, #58a6ff); font-weight: 600;
+}
 `;
+
+    const THINKING_LEVELS = [
+        { id: 'auto', label: '🧠 自由', desc: '默认/动态' },
+        { id: 'low', label: '🧠 低', desc: '轻度推理' },
+        { id: 'medium', label: '🧠 中', desc: '平衡思考' },
+        { id: 'high', label: '🧠 高', desc: '深度思考' },
+        { id: 'off', label: '🧠 关闭', desc: '关闭思维链' }
+    ];
 
     function init({ electronAPI, selectedItemRef, nameObserveTarget, sendMessageBtn }) {
         const actions = document.querySelector('.chat-input-actions');
@@ -37,6 +67,36 @@
         const wrap = document.createElement('div');
         wrap.className = 'vcp-model-select';
         wrap.hidden = true;
+
+        // 思考强度切换按钮
+        const thinkingTrigger = document.createElement('button');
+        thinkingTrigger.type = 'button';
+        thinkingTrigger.className = 'vcp-thinking-select-trigger';
+        thinkingTrigger.setAttribute('aria-haspopup', 'listbox');
+        thinkingTrigger.setAttribute('aria-expanded', 'false');
+        const thinkingLabel = document.createElement('span');
+        thinkingLabel.className = 'vcp-thinking-select-label';
+        thinkingTrigger.appendChild(thinkingLabel);
+
+        const thinkingPopup = document.createElement('div');
+        thinkingPopup.className = 'vcp-thinking-popup';
+        thinkingPopup.hidden = true;
+
+        THINKING_LEVELS.forEach(lvl => {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'vcp-thinking-item';
+            btn.dataset.level = lvl.id;
+            btn.innerHTML = `<span>${lvl.label}</span><small style="opacity:0.6;font-size:10px;">${lvl.desc}</small>`;
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                chooseThinking(lvl.id);
+                closeThinkingPopup();
+            });
+            thinkingPopup.appendChild(btn);
+        });
+
+        // 模型选择按钮
         const trigger = document.createElement('button');
         trigger.type = 'button';
         trigger.className = 'vcp-model-select-trigger';
@@ -49,7 +109,10 @@
         chevron.setAttribute('aria-hidden', 'true');
         chevron.textContent = 'chevron-down';
         trigger.append(labelEl, chevron);
+
+        wrap.appendChild(thinkingTrigger);
         wrap.appendChild(trigger);
+        wrap.appendChild(thinkingPopup);
 
         const anchor = document.getElementById('mainVoiceInputBtn')
             || sendMessageBtn
@@ -63,18 +126,75 @@
         const currentItem = () => selectedItemRef.get?.() || null;
         const isAgent = item => !!item && item.type === 'agent' && !!item.id;
         const readModel = item => (item?.config?.model ?? item?.model ?? '') || '';
+        const readThinking = item => (item?.config?.thinkingIntensity ?? item?.thinkingIntensity ?? 'auto') || 'auto';
+
+        const closeThinkingPopup = () => {
+            thinkingPopup.hidden = true;
+            thinkingTrigger.setAttribute('aria-expanded', 'false');
+        };
+
+        const toggleThinkingPopup = (e) => {
+            e.stopPropagation();
+            if (!thinkingPopup.hidden) {
+                closeThinkingPopup();
+            } else {
+                thinkingPopup.hidden = false;
+                thinkingTrigger.setAttribute('aria-expanded', 'true');
+            }
+        };
+
+        thinkingTrigger.addEventListener('click', toggleThinkingPopup);
+        const onDocumentClick = (e) => {
+            if (!wrap.contains(e.target)) closeThinkingPopup();
+        };
+        document.addEventListener('click', onDocumentClick);
+
+        const refreshThinking = (item) => {
+            const intensity = readThinking(item);
+            const found = THINKING_LEVELS.find(l => l.id === intensity) || THINKING_LEVELS[0];
+            thinkingLabel.textContent = found.label;
+            thinkingTrigger.title = `模型思考强度：${found.label} (${found.desc})（点击切换档位）`;
+            thinkingPopup.querySelectorAll('.vcp-thinking-item').forEach(b => {
+                b.classList.toggle('active', b.dataset.level === intensity);
+            });
+        };
 
         const refresh = () => {
             const item = currentItem();
             const show = isAgent(item);
             wrap.hidden = !show;
-            if (!show) { popup?.close?.(); return; }
+            if (!show) {
+                popup?.close?.();
+                closeThinkingPopup();
+                return;
+            }
             const model = readModel(item);
             labelEl.textContent = model || '选择模型';
             trigger.title = model
                 ? `当前模型：${model}（左键切换 / 右键勾选候选列表）`
                 : '左键选择模型 / 右键勾选候选模型';
+            refreshThinking(item);
         };
+
+        async function chooseThinking(level) {
+            const item = currentItem();
+            if (disposed || !isAgent(item)) return;
+            if (readThinking(item) === level) return;
+            try {
+                const result = await electronAPI.saveAgentConfig(item.id, { thinkingIntensity: level });
+                if (!result?.success) throw new Error(result?.error || 'save-failed');
+                const latest = currentItem();
+                if (isAgent(latest) && latest.id === item.id) {
+                    const next = { ...latest, thinkingIntensity: level };
+                    if (latest.config) next.config = { ...latest.config, thinkingIntensity: level };
+                    selectedItemRef.set(next);
+                }
+                refresh();
+            } catch (err) {
+                console.error('[ComposerModelSelect] 切换思考强度失败:', err);
+                window.uiHelperFunctions?.showToastNotification?.(`切换思考强度失败: ${err.message || err}`, 'error');
+            }
+        }
 
         async function drainSaves(agentId, state) {
             try {
@@ -192,6 +312,8 @@
                 for (const state of saves.values()) state.pending = null;
                 popup?.dispose();
                 popup = null;
+                closeThinkingPopup();
+                document.removeEventListener('click', onDocumentClick);
                 window.removeEventListener('focus', refresh);
                 observer?.disconnect();
                 wrap.remove();

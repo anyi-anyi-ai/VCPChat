@@ -215,6 +215,7 @@ async function buildDefaultMessageContent({ message, electronAPI }) {
 
 function buildModelConfig(agentConfig = {}, overrides = {}) {
     const streamSetting = agentConfig.streamOutput;
+    const thinkingIntensity = agentConfig.thinkingIntensity || agentConfig.thinking_intensity;
     const stream = streamSetting === undefined
         ? true
         : streamSetting === true || streamSetting === 'true';
@@ -243,6 +244,12 @@ function buildModelConfig(agentConfig = {}, overrides = {}) {
             && agentConfig.top_k !== null
             && agentConfig.top_k !== ''
             ? { top_k: Number.parseInt(agentConfig.top_k, 10) }
+            : {}),
+        ...(thinkingIntensity && thinkingIntensity !== "auto"
+            ? {
+                thinkingIntensity,
+                reasoning_effort: thinkingIntensity === "off" ? "none" : thinkingIntensity,
+            }
             : {}),
         stream,
         ...overrides,

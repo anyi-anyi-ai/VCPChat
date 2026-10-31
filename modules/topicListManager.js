@@ -759,7 +759,31 @@ window.topicListManager = (() => {
             const availableTopicIds = new Set(availableTopics.map(topic => topic.id));
             selectedTopicIds = new Set([...selectedTopicIds].filter(topicId => availableTopicIds.has(topicId)));
 
-            // topicsToProcess.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+            const isSyntheticRecovered = (t) => (t.name && t.name.startsWith("Recovered: ")) || t.creatorSource === "recovery";
+            const getTopicTimestamp = (t) => {
+                if (t.lastActiveAt) return Number(t.lastActiveAt);
+                if (t.lastMessageTime) return Number(t.lastMessageTime);
+                const time = t.updatedAt || t.createdAt || 0;
+                if (time > 100000000000) return Number(time);
+                if (typeof t.id === "string" && /^topic_\d{10,}$/.test(t.id)) {
+                    const parsed = parseInt(t.id.slice(6), 10);
+                    if (Number.isFinite(parsed)) return parsed;
+                }
+                return 0;
+            };
+
+            topicsToProcess.sort((a, b) => {
+                const recA = isSyntheticRecovered(a) ? 1 : 0;
+                const recB = isSyntheticRecovered(b) ? 1 : 0;
+                if (recA !== recB) return recA - recB;
+
+                const timeA = getTopicTimestamp(a);
+                const timeB = getTopicTimestamp(b);
+                if (timeA && timeB && timeA !== timeB) {
+                    return timeB - timeA;
+                }
+                return 0;
+            });
 
             if (contentQueryTerm) {
                 let frontendFilteredTopics = topicsToProcess.filter(topic => {

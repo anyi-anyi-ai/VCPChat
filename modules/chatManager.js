@@ -1023,6 +1023,17 @@ export const chatManager = (() => {
 
         try {
             currentTopicIdRef.set(topicId);
+            try {
+                const activeItem = currentSelectedItemRef?.get?.();
+                const touch = (arr) => {
+                    if (Array.isArray(arr)) {
+                        const t = arr.find(x => x && x.id === topicId);
+                        if (t) t.lastActiveAt = Date.now();
+                    }
+                };
+                touch(activeItem?.topics);
+                touch(activeItem?.config?.topics);
+            } catch {}
             if (messageRenderer) {
                 messageRenderer.setCurrentTopicId(topicId);
                 // Navigation intent ends the old media lease before any IPC await.
@@ -1530,7 +1541,12 @@ export const chatManager = (() => {
             const existingTopicTitle = currentTopicObject ? currentTopicObject.name : "主要对话";
             const currentAgentName = agentConfigForSummary.name || 'AI';
 
-            if (existingTopicTitle === "主要对话" || existingTopicTitle.startsWith("新话题")) {
+            const needsSummary = !existingTopicTitle ||
+                existingTopicTitle === "主要对话" ||
+                existingTopicTitle.startsWith("新话题") ||
+                existingTopicTitle.startsWith("Recovered:") ||
+                existingTopicTitle.includes("(备用)");
+            if (needsSummary) {
                 if (messageRenderer && typeof messageRenderer.summarizeTopicFromMessages === 'function') {
                     const summarizedTitle = await messageRenderer.summarizeTopicFromMessages(currentChatHistory.filter(m => !m.isThinking), currentAgentName);
                     if (summarizedTitle) {
